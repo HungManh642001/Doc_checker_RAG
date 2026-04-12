@@ -1,0 +1,70 @@
+.App {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.app-header {
+  background: white;
+  padding: 40px 30px;
+  border-radius: 12px;
+  margin-bottom: 30px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  text-align: center;
+}
+
+.app-header h1 {
+  color: #333;
+  font-size: 32px;
+  margin-bottom: 10px;
+}
+
+.app-header p {
+  color: #666;
+  font-size: 16px;
+}
+
+.app-container {
+  background: white;
+  border-radius: 12px;
+  padding: 30px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  min-height: 400px;
+}
+
+.completion-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+}
+
+.success-message {
+  text-align: center;
+}
+
+.success-message h2 {
+  color: #27ae60;
+  font-size: 28px;
+  margin-bottom: 15px;
+}
+
+.success-message p {
+  color: #666;
+  font-size: 16px;
+  margin-bottom: 30px;
+}
+
+@media (max-width: 768px) {
+  .app-header {
+    padding: 20px 15px;
+  }
+
+  .app-header h1 {
+    font-size: 24px;
+  }
+
+  .app-container {
+    padding: 15px;
+  }
+}
