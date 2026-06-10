@@ -344,3 +344,77 @@
   border-radius: 3px;
   font-size: 0.9em;
 }
+
+/* --- Preset library --- */
+.preset-library {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f7f8fc;
+  border: 1px dashed #cbd5e0;
+  border-radius: 8px;
+}
+
+.preset-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #4a5568;
+}
+
+.preset-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  margin-bottom: 6px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s ease;
+}
+
+.preset-chip:hover {
+  border-color: #a3bffa;
+}
+
+.preset-chip.selected {
+  border-color: #5a67d8;
+  background: #eef2ff;
+}
+
+.preset-chip input {
+  cursor: pointer;
+}
+
+.preset-name {
+  flex: 1;
+  color: #2d3748;
+  word-break: break-word;
+}
+
+.preset-size {
+  color: #a0aec0;
+  font-size: 12px;
+}
+
+.preset-del {
+  cursor: pointer;
+  opacity: 0.6;
+  font-size: 13px;
+}
+
+.preset-del:hover {
+  opacity: 1;
+}
+
+.save-preset-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 14px;
+  font-size: 14px;
+  color: #4a5568;
+  cursor: pointer;
+}

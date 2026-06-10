@@ -16,9 +16,64 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
   const [ruleDocuments, setRuleDocuments] = React.useState([]);
   const [defaultRules, setDefaultRules] = React.useState(null);
   const [showDefaultRules, setShowDefaultRules] = React.useState(false);
+  // Thư viện preset lưu sẵn + lựa chọn của người dùng
+  const [presets, setPresets] = React.useState({ references: [], rules: [] });
+  const [selectedRefPresets, setSelectedRefPresets] = React.useState([]);
+  const [selectedRulePresets, setSelectedRulePresets] = React.useState([]);
+  const [savePresets, setSavePresets] = React.useState(false);
   const fileInputMain = React.useRef(null);
   const fileInputRef = React.useRef(null);
   const fileInputRule = React.useRef(null);
+
+  const loadPresets = React.useCallback(async () => {
+    try {
+      const res = await fetch('/api/presets');
+      const data = await res.json();
+      setPresets({ references: data.references || [], rules: data.rules || [] });
+    } catch (e) {
+      console.error('Không tải được thư viện preset:', e);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    loadPresets();
+  }, [loadPresets]);
+
+  const togglePreset = (kind, name) => {
+    if (kind === 'reference') {
+      setSelectedRefPresets((prev) =>
+        prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
+      );
+    } else {
+      setSelectedRulePresets((prev) =>
+        prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
+      );
+    }
+  };
+
+  const deletePreset = async (kind, name) => {
+    if (!window.confirm(`Xoá preset "${name}" khỏi thư viện?`)) return;
+    try {
+      const res = await fetch(`/api/presets/${kind}/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Xoá thất bại');
+      }
+      toast.success(`Đã xoá ${name}`, { autoClose: 2000 });
+      setSelectedRefPresets((p) => p.filter((n) => n !== name));
+      setSelectedRulePresets((p) => p.filter((n) => n !== name));
+      loadPresets();
+    } catch (e) {
+      toast.error(e.message, { autoClose: 3000 });
+    }
+  };
+
+  const formatSize = (bytes) =>
+    bytes >= 1024 * 1024
+      ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+      : `${(bytes / 1024).toFixed(1)} KB`;
 
   const toggleDefaultRules = async () => {
     if (showDefaultRules) {
@@ -68,28 +123,42 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
       return;
     }
 
-    if (referenceDocuments.length === 0 && ruleDocuments.length === 0) {
-      toast.warning(
-        'Khuyến nghị: Hãy tải lên ít nhất một tài liệu sở cứ hoặc quy định để cải thiện độ chính xác.',
+    const hasAnySource =
+      referenceDocuments.length ||
+      ruleDocuments.length ||
+      selectedRefPresets.length ||
+      selectedRulePresets.length;
+    if (!hasAnySource) {
+      toast.info(
+        'Không chọn sở cứ/quy định — hệ thống sẽ dùng bộ mặc định (NĐ 86 + quy định chung).',
         { autoClose: 5000 }
       );
     }
 
     setLoading(true);
     const formData = new FormData();
-    
+
     // Add main document
     formData.append('mainDocument', mainDocument);
-    
+
     // Add reference documents
     referenceDocuments.forEach(doc => {
       formData.append('referenceDocuments', doc);
     });
-    
+
     // Add rule documents
     ruleDocuments.forEach(doc => {
       formData.append('ruleDocuments', doc);
     });
+
+    // Add selected presets (tái dùng từ thư viện)
+    selectedRefPresets.forEach((name) => formData.append('referencePresets', name));
+    selectedRulePresets.forEach((name) => formData.append('rulePresets', name));
+
+    // Lưu file vừa tải lên thành preset
+    if (savePresets) {
+      formData.append('savePresets', 'true');
+    }
 
     try {
       const response = await fetch('/api/upload', {
@@ -213,6 +282,38 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
               ))}
             </div>
           )}
+
+          {presets.references.length > 0 && (
+            <div className="preset-library">
+              <p className="preset-title">📂 Hoặc dùng lại từ thư viện sở cứ:</p>
+              {presets.references.map((p) => (
+                <label
+                  key={p.name}
+                  className={`preset-chip ${selectedRefPresets.includes(p.name) ? 'selected' : ''}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedRefPresets.includes(p.name)}
+                    onChange={() => togglePreset('reference', p.name)}
+                  />
+                  <span className="preset-name">📄 {p.name}</span>
+                  <span className="preset-size">{formatSize(p.size)}</span>
+                  {!p.protected && (
+                    <span
+                      className="preset-del"
+                      title="Xoá khỏi thư viện"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        deletePreset('reference', p.name);
+                      }}
+                    >
+                      🗑️
+                    </span>
+                  )}
+                </label>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Rule Documents */}
@@ -267,16 +368,62 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
               ))}
             </div>
           )}
+
+          {presets.rules.length > 0 && (
+            <div className="preset-library">
+              <p className="preset-title">📂 Hoặc dùng lại từ thư viện quy định:</p>
+              {presets.rules.map((p) => (
+                <label
+                  key={p.name}
+                  className={`preset-chip ${selectedRulePresets.includes(p.name) ? 'selected' : ''}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedRulePresets.includes(p.name)}
+                    onChange={() => togglePreset('rule', p.name)}
+                  />
+                  <span className="preset-name">⚖️ {p.name}</span>
+                  <span className="preset-size">{formatSize(p.size)}</span>
+                  {!p.protected && (
+                    <span
+                      className="preset-del"
+                      title="Xoá khỏi thư viện"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        deletePreset('rule', p.name);
+                      }}
+                    >
+                      🗑️
+                    </span>
+                  )}
+                </label>
+              ))}
+            </div>
+          )}
         </div>
 
+        {/* Lưu thành preset */}
+        {(referenceDocuments.length > 0 || ruleDocuments.length > 0) && (
+          <label className="save-preset-toggle">
+            <input
+              type="checkbox"
+              checked={savePresets}
+              onChange={(e) => setSavePresets(e.target.checked)}
+            />
+            💾 Lưu các file vừa tải lên vào thư viện để tái dùng lần sau
+          </label>
+        )}
+
         {/* Summary */}
-        {(mainDocument || docCount > 0) && (
+        {(mainDocument || docCount > 0 ||
+          selectedRefPresets.length > 0 || selectedRulePresets.length > 0) && (
           <div className="upload-summary">
             <p>
               ✓ Tài liệu cần thẩm định: <strong>{mainDocument?.name || 'Chưa chọn'}</strong>
             </p>
             <p>
-              ✓ Tài liệu sở cứ/quy định: <strong>{docCount}</strong> file
+              ✓ Sở cứ: <strong>{referenceDocuments.length + selectedRefPresets.length}</strong>{' '}
+              · Quy định: <strong>{ruleDocuments.length + selectedRulePresets.length}</strong>
             </p>
           </div>
         )}

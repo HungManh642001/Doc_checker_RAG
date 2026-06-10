@@ -224,3 +224,63 @@
   color: #667eea;
   font-weight: 600;
 }
+
+/* Results toolbar: view switch + export */
+.results-toolbar {
+  max-width: 1100px;
+  margin: 0 auto 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.view-switch {
+  display: inline-flex;
+  background: #edf2f7;
+  border-radius: 8px;
+  padding: 4px;
+  gap: 4px;
+}
+
+.switch-btn {
+  border: none;
+  background: transparent;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  color: #4a5568;
+  transition: all 0.2s ease;
+}
+
+.switch-btn.active {
+  background: #fff;
+  color: #5a67d8;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.btn-excel {
+  background: #1d7044;
+  color: #fff;
+  text-decoration: none;
+  padding: 10px 18px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-excel:hover {
+  background: #155d37;
+}
+
+.results-container > .error-viewer,
+.results-container > .doc-preview {
+  max-width: 1100px;
+  margin: 0 auto;
+}

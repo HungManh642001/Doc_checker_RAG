@@ -239,7 +239,9 @@ class RAGAnalyzer:
             ]
             return {
                 "id": f"error_c{chunk_idx}_{err_idx}",
-                "original_text": error.original_text[:200],
+                # Giữ NGUYÊN VĂN original_text để apply_text_corrections khớp chính xác
+                # khi thay thế trong DOCX (cắt ngắn sẽ làm hỏng phép thay thế).
+                "original_text": error.original_text,
                 "elementId": f"chunk_{chunk_idx}",
                 "elementType": "chunk",
                 "danh_sach_cac_loi": details,

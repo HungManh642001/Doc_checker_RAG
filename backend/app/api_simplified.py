@@ -5,9 +5,12 @@ No preview step - direct upload to analysis
 
 from flask import Blueprint, request, jsonify, send_file
 import os
+import io
 import uuid
+import shutil
+from pathlib import Path
 from werkzeug.utils import secure_filename
-from app.rag_analyzer import make_analyzer
+from app.rag_analyzer import make_analyzer, docx_to_html
 from app.document_processor import DocumentProcessor
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
@@ -19,6 +22,72 @@ _sessions = {}
 ALLOWED_EXTENSIONS = {'docx', 'doc', 'pdf', 'html'}
 # Định dạng cho file quy định (rules) — cho phép markdown/text/word
 ALLOWED_RULE_EXTENSIONS = {'md', 'txt', 'docx', 'doc'}
+
+# ---------------------------------------------------------------------------
+# Thư viện preset (bộ sở cứ / quy định lưu sẵn để tái dùng)
+# ---------------------------------------------------------------------------
+_RAG_DATA_DIR = Path(__file__).parent.parent / 'rag' / 'data'
+REFERENCE_PRESET_DIR = _RAG_DATA_DIR / 'reference_documents'
+RULES_PRESET_DIR = _RAG_DATA_DIR / 'rules'
+# Không cho xoá các preset mặc định đi kèm hệ thống
+_PROTECTED_PRESETS = {'quy_dinh_chung.md', '86nd.docx'}
+
+
+def _preset_dir(kind: str) -> Path:
+    """Trả về thư mục preset theo loại ('reference' | 'rule')."""
+    return REFERENCE_PRESET_DIR if kind == 'reference' else RULES_PRESET_DIR
+
+
+def _list_presets(kind: str, allowed_ext: set) -> list:
+    """Liệt kê các file preset hợp lệ trong thư viện."""
+    d = _preset_dir(kind)
+    if not d.exists():
+        return []
+    items = []
+    for p in sorted(d.iterdir()):
+        if p.is_file() and _ext(p.name) in allowed_ext:
+            items.append({
+                'name': p.name,
+                'size': p.stat().st_size,
+                'protected': p.name in _PROTECTED_PRESETS,
+            })
+    return items
+
+
+def _save_paths_as_presets(saved_paths: list, target_dir: Path) -> None:
+    """
+    Copy các file đã upload (đường dẫn trong upload_dir) vào thư viện preset.
+    Bỏ tiền tố 'ref_N_' / 'rule_N_' để khôi phục tên gốc.
+    """
+    import re
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for path in saved_paths:
+        base = os.path.basename(path)
+        clean = re.sub(r'^(?:ref|rule)_\d+_', '', base)
+        dest = target_dir / clean
+        try:
+            if not dest.exists():
+                shutil.copy2(path, dest)
+                print(f"[API] Lưu preset: {clean}")
+        except Exception as e:  # noqa: BLE001
+            print(f"[API] Không lưu được preset '{clean}': {e}")
+
+
+def _resolve_preset_paths(kind: str, names: list, allowed_ext: set) -> list:
+    """
+    Chuyển danh sách tên preset → đường dẫn tuyệt đối (an toàn, chống path traversal).
+    Bỏ qua tên không hợp lệ / không tồn tại.
+    """
+    d = _preset_dir(kind)
+    paths = []
+    for raw in names:
+        name = os.path.basename((raw or '').strip())  # chặn '../'
+        if not name or _ext(name) not in allowed_ext:
+            continue
+        candidate = d / name
+        if candidate.exists() and candidate.is_file():
+            paths.append(str(candidate))
+    return paths
 
 
 def _ext(filename):
@@ -94,6 +163,19 @@ def upload_and_analyze():
                     rule_paths.append(rule_path)
                     print(f"[API] Saved rule: {rule_filename}")
 
+            # --- Lưu các file VỪA UPLOAD thành preset (trước khi trộn preset cũ) ---
+            if request.form.get('savePresets', '').lower() == 'true':
+                _save_paths_as_presets(ref_paths, REFERENCE_PRESET_DIR)
+                _save_paths_as_presets(rule_paths, RULES_PRESET_DIR)
+
+            # --- Preset đã chọn từ thư viện (tái dùng, không cần upload lại) ---
+            ref_presets = request.form.getlist('referencePresets')
+            rule_presets = request.form.getlist('rulePresets')
+            ref_paths += _resolve_preset_paths('reference', ref_presets, ALLOWED_EXTENSIONS)
+            rule_paths += _resolve_preset_paths('rule', rule_presets, ALLOWED_RULE_EXTENSIONS)
+            if ref_presets or rule_presets:
+                print(f"[API] Dùng preset: {len(ref_presets)} sở cứ, {len(rule_presets)} quy định")
+
             # Tạo analyzer riêng cho session này.
             # Sở cứ rỗng → analyzer tự fallback sang sở cứ mặc định (NĐ 86).
             # Quy định rỗng → analyzer tự fallback sang quy_dinh_chung.md.
@@ -108,10 +190,18 @@ def upload_and_analyze():
             # Run analysis
             print("[API] Running document analysis...")
             errors = analyzer.analyze_document(main_path)
-            
+
+            # Chuyển tài liệu chính sang HTML để hiển thị preview (không chặn nếu lỗi)
+            try:
+                main_html = docx_to_html(main_path)
+            except Exception as e:  # noqa: BLE001
+                print(f"[API] Không tạo được HTML preview: {e}")
+                main_html = ""
+
             # Lưu session, kèm analyzer để cleanup sau
             _sessions[session_id] = {
                 'main_path': main_path,
+                'main_html': main_html,
                 'ref_paths': ref_paths,
                 'rule_paths': rule_paths,
                 'upload_dir': upload_dir,
@@ -313,6 +403,138 @@ def get_default_rules():
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/session/<session_id>/document', methods=['GET'])
+def get_document_html(session_id):
+    """
+    Trả về HTML của tài liệu chính + danh sách lỗi, để frontend hiển thị
+    preview và highlight các đoạn nội dung sai (theo original_text).
+    """
+    if session_id not in _sessions:
+        return jsonify({'error': 'Session not found'}), 404
+    session = _sessions[session_id]
+    return jsonify({
+        'success': True,
+        'html': session.get('main_html', ''),
+        'errors': session.get('errors', []),
+    }), 200
+
+
+@api_bp.route('/presets', methods=['GET'])
+def list_presets():
+    """Liệt kê thư viện sở cứ & quy định lưu sẵn để tái dùng."""
+    return jsonify({
+        'success': True,
+        'references': _list_presets('reference', ALLOWED_EXTENSIONS),
+        'rules': _list_presets('rule', ALLOWED_RULE_EXTENSIONS),
+    }), 200
+
+
+@api_bp.route('/presets/<kind>/<path:name>', methods=['DELETE'])
+def delete_preset(kind, name):
+    """Xoá một preset khỏi thư viện (không cho xoá preset mặc định)."""
+    if kind not in ('reference', 'rule'):
+        return jsonify({'error': 'kind phải là reference hoặc rule'}), 400
+
+    safe_name = os.path.basename(name)
+    if safe_name in _PROTECTED_PRESETS:
+        return jsonify({'error': f'Không thể xoá preset mặc định "{safe_name}"'}), 403
+
+    target = _preset_dir(kind) / safe_name
+    if not target.exists() or not target.is_file():
+        return jsonify({'error': 'Preset không tồn tại'}), 404
+    try:
+        target.unlink()
+        return jsonify({'success': True, 'message': f'Đã xoá {safe_name}'}), 200
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/session/<session_id>/report.xlsx', methods=['GET'])
+def export_report_excel(session_id):
+    """Xuất báo cáo danh sách lỗi ra file Excel (.xlsx)."""
+    if session_id not in _sessions:
+        return jsonify({'error': 'Session not found'}), 404
+
+    session = _sessions[session_id]
+    errors = session.get('errors', [])
+
+    try:
+        xlsx_bytes = _build_excel_report(errors, os.path.basename(session['main_path']))
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Không tạo được báo cáo Excel: {e}'}), 500
+
+    return send_file(
+        io.BytesIO(xlsx_bytes),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=f'bao_cao_tham_dinh_{session_id[:8]}.xlsx',
+    )
+
+
+def _build_excel_report(errors: list, doc_name: str) -> bytes:
+    """Dựng workbook báo cáo lỗi (mỗi loại lỗi con là một dòng) → trả về bytes."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Báo cáo thẩm định"
+
+    headers = [
+        'STT', 'Nội dung gốc', 'Loại lỗi', 'Giải thích',
+        'Đề xuất sửa', 'Vị trí sở cứ', 'Trích dẫn sở cứ',
+    ]
+    widths = [6, 40, 22, 50, 35, 24, 40]
+
+    # Tiêu đề tài liệu
+    ws.append([f'BÁO CÁO THẨM ĐỊNH: {doc_name}'])
+    ws.append([f'Tổng số mục lỗi: {len(errors)}'])
+    ws.append([])
+
+    header_row_idx = ws.max_row + 1
+    ws.append(headers)
+
+    header_fill = PatternFill('solid', fgColor='4472C4')
+    header_font = Font(bold=True, color='FFFFFF')
+    thin = Side(style='thin', color='BFBFBF')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    for col_idx, w in enumerate(widths, start=1):
+        ws.column_dimensions[ws.cell(row=header_row_idx, column=col_idx).column_letter].width = w
+        c = ws.cell(row=header_row_idx, column=col_idx)
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = Alignment(horizontal='center', vertical='center')
+        c.border = border
+
+    stt = 0
+    for err in errors:
+        sub_errors = err.get('danh_sach_cac_loi') or [{}]
+        for sub in sub_errors:
+            stt += 1
+            row = [
+                stt,
+                err.get('original_text', ''),
+                sub.get('error_type', ''),
+                sub.get('reasoning', ''),
+                err.get('suggestion', ''),
+                err.get('reference_location', ''),
+                err.get('reference_quote', ''),
+            ]
+            ws.append(row)
+            r = ws.max_row
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=r, column=col_idx)
+                cell.alignment = Alignment(wrap_text=True, vertical='top')
+                cell.border = border
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 @api_bp.route('/health', methods=['GET'])

@@ -2,6 +2,7 @@ import React from 'react';
 import './AppSimplified.css';
 import DocumentUploadSimplified from './components/DocumentUploadSimplified';
 import ErrorViewer from './components/ErrorViewer';
+import DocumentPreview from './components/DocumentPreview';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
@@ -22,6 +23,7 @@ function App() {
   const [errorCount, setErrorCount] = React.useState(0);
   const [appliedCount, setAppliedCount] = React.useState(0);
   const [downloadUrl, setDownloadUrl] = React.useState(null);
+  const [view, setView] = React.useState('list'); // 'list' | 'document'
 
   const handleUploadComplete = (newSessionId, analysisErrors) => {
     setSessionId(newSessionId);
@@ -88,6 +90,7 @@ function App() {
     setErrorCount(0);
     setAppliedCount(0);
     setDownloadUrl(null);
+    setView('list');
   };
 
   const renderStep = () => {
@@ -107,12 +110,41 @@ function App() {
         return (
           <div className="app-container results-container">
             {errors.length > 0 ? (
-              <ErrorViewer
-                errors={errors}
-                onApplySuggestions={handleApplySuggestions}
-                onReset={handleReset}
-                loading={loading}
-              />
+              <>
+                <div className="results-toolbar">
+                  <div className="view-switch">
+                    <button
+                      className={`switch-btn ${view === 'list' ? 'active' : ''}`}
+                      onClick={() => setView('list')}
+                    >
+                      📋 Danh sách lỗi
+                    </button>
+                    <button
+                      className={`switch-btn ${view === 'document' ? 'active' : ''}`}
+                      onClick={() => setView('document')}
+                    >
+                      📄 Xem trên tài liệu
+                    </button>
+                  </div>
+                  <a
+                    className="btn btn-excel"
+                    href={`/api/session/${sessionId}/report.xlsx`}
+                  >
+                    📊 Xuất Excel
+                  </a>
+                </div>
+
+                {view === 'list' ? (
+                  <ErrorViewer
+                    errors={errors}
+                    onApplySuggestions={handleApplySuggestions}
+                    onReset={handleReset}
+                    loading={loading}
+                  />
+                ) : (
+                  <DocumentPreview sessionId={sessionId} errors={errors} />
+                )}
+              </>
             ) : (
               <div className="no-errors-screen">
                 <h1>✅ Tài liệu hợp lệ</h1>
