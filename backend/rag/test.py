@@ -1,9 +1,9 @@
 import time
-from knowledge_base.vector_db import get_or_build_index, load_existing_index, test_retrieval
-from knowledge_base.rules import load_rules
-from document_processing.chunker import chunk_html_table
-from audit_logic.audit_engine import run_audit
-from audit_logic.audit_models import KetQuaThamDinh
+from rag.knowledge_base.vector_db import get_or_build_index, load_existing_index, test_retrieval
+from rag.knowledge_base.rules import load_rules
+from rag.document_processing.chunker import chunk_html_table
+from rag.audit_logic.audit_engine import run_audit
+from rag.audit_logic.audit_models import KetQuaThamDinh
 
 
 

@@ -2,6 +2,9 @@ import os
 import math
 import unicodedata
 import re
+from pathlib import Path
+from typing import List, Tuple
+
 import qdrant_client
 from bs4 import BeautifulSoup
 
@@ -13,7 +16,7 @@ from llama_index.core import (
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.embeddings.ollama import OllamaEmbedding
-from config import OLLAMA_URL,EMBEDDING_MODEL, EMBEDDING_MODEL_PATH, EMBEDDING_CACHE_FOLDER
+from rag.config import OLLAMA_URL, EMBEDDING_MODEL, EMBEDDING_MODEL_PATH, EMBEDDING_CACHE_FOLDER
 
 # embed_model = HuggingFaceEmbedding(
 #     model_name=EMBEDDING_MODEL_PATH,
@@ -130,7 +133,16 @@ def parse_html_to_nodes_smart(html_content, ten_van_ban):
     print(f"  -> Đã bóc tách & nhúng vector thành công {len(nodes)} Node.")
     return nodes
 
-def get_or_build_index(data_dir="./data/reference_html", db_path='./data/qdrant_db', collection_name="van_ban_so_cu"):
+_RAG_DATA = Path(__file__).parent.parent / "data"
+
+
+def get_or_build_index(
+    data_dir: str | None = None,
+    db_path: str | None = None,
+    collection_name: str = "van_ban_so_cu",
+):
+    data_dir = data_dir or str(_RAG_DATA / "reference_html")
+    db_path = db_path or str(_RAG_DATA / "qdrant_db")
     client = qdrant_client.QdrantClient(path=db_path)
     vector_store = QdrantVectorStore(client=client, collection_name=collection_name)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
@@ -138,7 +150,8 @@ def get_or_build_index(data_dir="./data/reference_html", db_path='./data/qdrant_
     try:
         if client.collection_exists(collection_name) and client.get_collection(collection_name).vectors_count > 0:
             print(f"Đã tải Database '{collection_name}' từ ổ cứng")
-            return VectorStoreIndex.from_vector_store(vector_store=vector_store)
+            index = VectorStoreIndex.from_vector_store(vector_store=vector_store)
+            return index, client
     except Exception:
         pass
 
@@ -171,6 +184,81 @@ def load_existing_index(db_path='./data/qdrant_db', collection_name="van_ban_so_
         embed_model=embed_model
     )
     return index, client
+
+def build_index_in_memory(
+    html_docs: List[Tuple[str, str]],
+    collection_name: str = "session_refs",
+) -> Tuple[VectorStoreIndex, qdrant_client.QdrantClient, List]:
+    """
+    Dựng Qdrant index in-memory từ danh sách (html_content, doc_name).
+    Dùng cho mỗi session upload thay vì đọc DB dựng sẵn trên ổ cứng.
+
+    Args:
+        html_docs: list of (html_content, document_name)
+        collection_name: tên collection Qdrant (mỗi session dùng riêng)
+
+    Returns:
+        (VectorStoreIndex, QdrantClient, all_nodes)
+        all_nodes cần thiết để xây BM25Retriever cho hybrid search.
+    """
+    all_nodes: List = []
+    for html_content, doc_name in html_docs:
+        nodes = parse_html_to_nodes_smart(html_content, doc_name)
+        all_nodes.extend(nodes)
+
+    if not all_nodes:
+        raise ValueError("Không trích xuất được node nào từ sở cứ đã cung cấp.")
+
+    client = qdrant_client.QdrantClient(location=":memory:")
+    vector_store = QdrantVectorStore(client=client, collection_name=collection_name)
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    index = VectorStoreIndex(nodes=all_nodes, storage_context=storage_context)
+    return index, client, all_nodes
+
+
+def build_hybrid_retriever(
+    index: VectorStoreIndex,
+    nodes: List,
+    top_k: int = 6,
+):
+    """
+    Tạo hybrid retriever kết hợp BM25 (lexical) + vector (semantic) với RRF fusion.
+
+    BM25 đặc biệt hiệu quả với từ khóa kỹ thuật tiếng Việt (tên thiết bị, đơn vị đo)
+    mà embedding model nomic-embed-text (tiếng Anh) dễ bỏ sót.
+
+    Fallback sang vector-only nếu llama-index-retrievers-bm25 / rank_bm25 chưa cài.
+    Cài đặt: pip install llama-index-retrievers-bm25
+
+    Args:
+        index: VectorStoreIndex đã dựng (dùng cho vector retriever)
+        nodes: list TextNode — phải là cùng nodes đã dùng để dựng index
+        top_k: số kết quả trả về từ mỗi retriever trước khi fuse
+    """
+    vector_retriever = index.as_retriever(similarity_top_k=top_k)
+
+    try:
+        from llama_index.retrievers.bm25 import BM25Retriever
+        from llama_index.core.retrievers import QueryFusionRetriever
+
+        bm25_retriever = BM25Retriever.from_defaults(
+            nodes=nodes,
+            similarity_top_k=top_k,
+        )
+        hybrid = QueryFusionRetriever(
+            retrievers=[vector_retriever, bm25_retriever],
+            similarity_top_k=top_k,
+            num_queries=1,       # tắt query expansion, chỉ fuse kết quả
+            mode="reciprocal_rerank",
+            use_async=False,
+        )
+        print("[RAG] Hybrid retriever (BM25 + vector, RRF) sẵn sàng.")
+        return hybrid
+
+    except ImportError:
+        print("[RAG] llama-index-retrievers-bm25 / rank_bm25 chưa cài — dùng vector-only.")
+        return vector_retriever
+
 
 def test_retrieval(index, query_html_chunk, top_k=5):
     retriever = index.as_retriever(similarity_top_k=top_k)

@@ -3,24 +3,68 @@ from typing import List, Optional
 
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.schema import NodeWithScore
-from llama_index.llms.ollama import Ollama
 from llama_index.core import Settings
-from config import MODEL, OLLAMA_URL, REQUEST_TIMEOUT, CONTEXT_WINDOW, NUM_CTX
-
-
-Settings.llm = Ollama(
-    model=MODEL, 
-    base_url=OLLAMA_URL,
-    temperature=0.0,
-    request_timeout=REQUEST_TIMEOUT,
-    context_window=CONTEXT_WINDOW,
-    thinking=False,
-    keep_alive=True,
-    additional_kwargs={
-        "num_ctx": NUM_CTX,
-        "seed": 42
-    }
+from rag.config import (
+    LLM_PROVIDER,
+    LITELLM_BASE_URL, LITELLM_API_KEY, LITELLM_MODEL, LITELLM_DISABLE_THINKING,
+    LITELLM_CONTEXT_WINDOW, LITELLM_MAX_TOKENS,
+    OLLAMA_MODEL, OLLAMA_URL,
+    REQUEST_TIMEOUT, CONTEXT_WINDOW, NUM_CTX,
 )
+
+
+def _build_llm():
+    """
+    Tạo LLM theo LLM_PROVIDER.
+
+    - litellm: OpenAILike trỏ vào LiteLLM proxy (qwen3-27b trên vLLM).
+               LiteLLM proxy là OpenAI-compatible nên dùng OpenAILike là chuẩn nhất.
+    - ollama:  Ollama local (dev offline / fallback).
+
+    Cả hai đều đặt is_function_calling_model=False (litellm) / không dùng tool,
+    để LlamaIndex sinh structured output bằng prompt JSON — an toàn cho vLLM.
+    """
+    if LLM_PROVIDER == "litellm":
+        from llama_index.llms.openai_like import OpenAILike
+
+        additional_kwargs = {"seed": 42}
+        if LITELLM_DISABLE_THINKING:
+            # qwen3 trên vLLM: tắt thinking qua chat_template_kwargs (truyền extra_body)
+            additional_kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": False}
+            }
+
+        return OpenAILike(
+            model=LITELLM_MODEL,
+            api_base=LITELLM_BASE_URL,
+            api_key=LITELLM_API_KEY,
+            is_chat_model=True,
+            is_function_calling_model=False,  # dùng prompt-based JSON
+            temperature=0.0,
+            timeout=REQUEST_TIMEOUT,
+            context_window=LITELLM_CONTEXT_WINDOW,  # khớp --max-model-len của vLLM
+            max_tokens=LITELLM_MAX_TOKENS,          # << context_window để chừa chỗ cho prompt
+            additional_kwargs=additional_kwargs,
+        )
+
+    # fallback: Ollama local
+    from llama_index.llms.ollama import Ollama
+
+    return Ollama(
+        model=OLLAMA_MODEL,
+        base_url=OLLAMA_URL,
+        temperature=0.0,
+        request_timeout=REQUEST_TIMEOUT,
+        context_window=CONTEXT_WINDOW,
+        thinking=False,
+        keep_alive=True,
+        additional_kwargs={"num_ctx": NUM_CTX, "seed": 42},
+    )
+
+
+Settings.llm = _build_llm()
+print(f"[RAG] LLM provider = {LLM_PROVIDER} "
+      f"({LITELLM_MODEL if LLM_PROVIDER == 'litellm' else OLLAMA_MODEL})")
 
 class DeduplicateHTMLPostprocessor(BaseNodePostprocessor):
     def _postprocess_nodes(self, nodes: List[NodeWithScore], query_bundle: Optional[any] = None) -> List[NodeWithScore]:

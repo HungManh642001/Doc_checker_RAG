@@ -3,11 +3,12 @@ Simplified API endpoints for RAG-based document analysis
 No preview step - direct upload to analysis
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file
 import os
 import uuid
 from werkzeug.utils import secure_filename
-from app.rag_analyzer import get_rag_analyzer, reset_rag_analyzer
+from app.rag_analyzer import make_analyzer
+from app.document_processor import DocumentProcessor
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -76,10 +77,10 @@ def upload_and_analyze():
                     ref_paths.append(ref_path)
                     print(f"[API] Saved reference: {ref_filename}")
             
-            # Initialize RAG system with reference documents
-            print("[API] Initializing RAG system...")
-            analyzer = get_rag_analyzer()
-            
+            # Tạo analyzer riêng cho session này và dựng index từ sở cứ upload
+            print("[API] Đang dựng index từ sở cứ...")
+            analyzer = make_analyzer()
+
             if not analyzer.initialize_rag_system(ref_paths):
                 return jsonify({
                     'error': 'Failed to initialize RAG system. Check logs for details.'
@@ -89,11 +90,12 @@ def upload_and_analyze():
             print("[API] Running document analysis...")
             errors = analyzer.analyze_document(main_path)
             
-            # Store session data
+            # Lưu session, kèm analyzer để cleanup sau
             _sessions[session_id] = {
                 'main_path': main_path,
                 'ref_paths': ref_paths,
                 'upload_dir': upload_dir,
+                'analyzer': analyzer,
                 'errors': errors,
                 'error_count': len(errors)
             }
@@ -144,48 +146,112 @@ def get_session_results(session_id):
 @api_bp.route('/session/<session_id>/apply-suggestions', methods=['POST'])
 def apply_suggestions(session_id):
     """
-    Apply user-approved suggestions to document
-    
+    Áp dụng các gợi ý được chấp nhận vào tài liệu và xuất file DOCX đã sửa.
+
     Expected JSON:
     {
-        'updates': [
+        "updates": [
             {
-                'errorId': 'error_...',
-                'action': 'accept' | 'reject' | 'custom',
-                'customSuggestion': '...'  # if action is 'custom'
+                "errorId": "error_c0_1",
+                "action": "accept" | "reject" | "custom",
+                "fixedValue": "..."   // tuỳ chọn: giá trị người dùng tự nhập
             }
         ]
+    }
+
+    Response:
+    {
+        "success": true,
+        "appliedCount": 3,
+        "downloadUrl": "/api/session/<id>/download"
     }
     """
     try:
         if session_id not in _sessions:
             return jsonify({'error': 'Session not found'}), 404
-        
+
         data = request.get_json()
         if not data or 'updates' not in data:
-            return jsonify({'error': 'Updates data is required'}), 400
-        
+            return jsonify({'error': 'Trường "updates" là bắt buộc'}), 400
+
         session = _sessions[session_id]
+        errors_by_id = {e['id']: e for e in session.get('errors', [])}
         updates = data['updates']
-        
-        # Track which errors are accepted
-        accepted_errors = []
+
+        # Xây danh sách thay thế text cho các lỗi được chấp nhận
+        text_corrections = []
         for update in updates:
-            if update.get('action') == 'accept':
-                accepted_errors.append(update.get('errorId'))
-        
-        # Update session
-        session['accepted_updates'] = updates
-        
+            if update.get('action') == 'reject':
+                continue
+
+            error = errors_by_id.get(update.get('errorId'))
+            if not error:
+                continue
+
+            original_text = error.get('original_text', '').strip()
+            if not original_text:
+                continue
+
+            # Ưu tiên: giá trị người dùng nhập tay > suggestion của AI
+            new_text = (
+                update.get('fixedValue')
+                or update.get('customSuggestion')
+                or error.get('suggestion', '')
+            ).strip()
+
+            if new_text:
+                text_corrections.append({
+                    'original_text': original_text,
+                    'new_text': new_text,
+                })
+
+        if not text_corrections:
+            return jsonify({
+                'success': True,
+                'appliedCount': 0,
+                'message': 'Không có sửa lỗi nào được chấp nhận.',
+            }), 200
+
+        # Áp dụng vào file DOCX
+        main_path = session['main_path']
+        base_name = os.path.splitext(os.path.basename(main_path))[0]
+        corrected_path = os.path.join(session['upload_dir'], f'{base_name}_corrected.docx')
+
+        processor = DocumentProcessor()
+        applied = processor.apply_text_corrections(main_path, corrected_path, text_corrections)
+
+        session['corrected_path'] = corrected_path
+        print(f"[API] Đã áp dụng {applied} sửa lỗi → {corrected_path}")
+
         return jsonify({
             'success': True,
-            'message': f'Applied {len(accepted_errors)} suggestions',
-            'acceptedCount': len(accepted_errors)
+            'appliedCount': applied,
+            'downloadUrl': f'/api/session/{session_id}/download',
         }), 200
-    
+
     except Exception as e:
-        print(f"[API] Error applying suggestions: {e}")
+        print(f"[API] Lỗi apply suggestions: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/session/<session_id>/download', methods=['GET'])
+def download_corrected(session_id):
+    """Tải về file DOCX đã được sửa lỗi."""
+    if session_id not in _sessions:
+        return jsonify({'error': 'Session not found'}), 404
+
+    session = _sessions[session_id]
+    corrected_path = session.get('corrected_path')
+
+    if not corrected_path or not os.path.exists(corrected_path):
+        return jsonify({
+            'error': 'Chưa có file đã sửa. Hãy gọi apply-suggestions trước.'
+        }), 404
+
+    download_name = os.path.basename(corrected_path)
+    return send_file(corrected_path, as_attachment=True, download_name=download_name)
 
 
 @api_bp.route('/session/<session_id>/cleanup', methods=['DELETE'])
@@ -194,22 +260,21 @@ def cleanup_session(session_id):
     Clean up session resources
     """
     if session_id in _sessions:
-        session = _sessions[session_id]
-        
-        # Clean up uploaded files
+        session = _sessions.pop(session_id)
+
+        # Đóng Qdrant client của session này
+        analyzer = session.get('analyzer')
+        if analyzer:
+            analyzer.cleanup()
+
+        # Xoá thư mục upload
         import shutil
         if os.path.exists(session['upload_dir']):
             try:
                 shutil.rmtree(session['upload_dir'])
-                print(f"[API] Cleaned up session {session_id}")
-            except:
+                print(f"[API] Đã xoá session {session_id}")
+            except Exception:
                 pass
-        
-        # Remove from memory
-        del _sessions[session_id]
-    
-    # Reset analyzer
-    reset_rag_analyzer()
     
     return jsonify({'success': True, 'message': 'Session cleaned up'}), 200
 
