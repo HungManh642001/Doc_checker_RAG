@@ -9,10 +9,26 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from rag.knowledge_base.vector_db import build_index_in_memory, build_hybrid_retriever
-from rag.knowledge_base.rules import load_rules
+from rag.knowledge_base.rules import load_rules_from_files
 from rag.document_processing.chunker import chunk_html_table
 from rag.audit_logic.audit_engine import run_audit
 from rag.audit_logic.audit_models import LoiThamDinh
+
+# Sở cứ mặc định đi kèm hệ thống (NĐ 86/2012) — dùng khi người dùng không upload sở cứ.
+_DEFAULT_REFERENCE_DIR = (
+    Path(__file__).parent.parent / "rag" / "data" / "reference_documents"
+)
+
+
+def _default_reference_docs() -> List[str]:
+    """Trả về danh sách sở cứ mặc định đi kèm hệ thống (nếu có)."""
+    if not _DEFAULT_REFERENCE_DIR.exists():
+        return []
+    return [
+        str(p)
+        for p in _DEFAULT_REFERENCE_DIR.iterdir()
+        if p.suffix.lower() in (".docx", ".doc", ".html")
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -86,19 +102,33 @@ class RAGAnalyzer:
     # Public API
     # ------------------------------------------------------------------
 
-    def initialize_rag_system(self, reference_docs: List[str]) -> bool:
+    def initialize_rag_system(
+        self,
+        reference_docs: List[str],
+        rule_docs: Optional[List[str]] = None,
+    ) -> bool:
         """
         Chuyển các file sở cứ thành HTML, embed và dựng Qdrant index in-memory.
 
         Args:
-            reference_docs: đường dẫn tới các file DOCX hoặc HTML sở cứ
+            reference_docs: đường dẫn tới các file DOCX/HTML sở cứ (xây dựng tri thức).
+                            Nếu rỗng → dùng sở cứ mặc định đi kèm hệ thống.
+            rule_docs: đường dẫn tới các file quy định (.md/.txt/.docx) người dùng upload.
+                       Nếu None/rỗng → dùng quy định mặc định (quy_dinh_chung.md).
 
         Returns:
             True nếu thành công
         """
         try:
-            self._rules = load_rules()
-            print("[RAG] Đã nạp quy định chung.")
+            # Quy định: ưu tiên file upload, fallback mặc định
+            self._rules = load_rules_from_files(rule_docs)
+
+            # Sở cứ: fallback sang sở cứ mặc định nếu người dùng không upload
+            if not reference_docs:
+                reference_docs = _default_reference_docs()
+                if reference_docs:
+                    print(f"[RAG] Không có sở cứ upload — dùng {len(reference_docs)} "
+                          f"sở cứ mặc định.")
 
             html_docs: List[Tuple[str, str]] = []
             for ref_path in reference_docs:
@@ -161,8 +191,8 @@ class RAGAnalyzer:
                         self._index, chunk, self._rules, top_k=top_k,
                         retriever=self._retriever,
                     )
-                    for error in ket_qua.danh_sach_loi:
-                        entry = self._transform_error(error, idx)
+                    for err_idx, error in enumerate(ket_qua.danh_sach_loi):
+                        entry = self._transform_error(error, idx, err_idx)
                         if entry:
                             all_errors.append(entry)
                     n = len(ket_qua.danh_sach_loi)
@@ -195,7 +225,9 @@ class RAGAnalyzer:
     # Internal
     # ------------------------------------------------------------------
 
-    def _transform_error(self, error: LoiThamDinh, chunk_idx: int) -> Optional[Dict]:
+    def _transform_error(
+        self, error: LoiThamDinh, chunk_idx: int, err_idx: int = 0
+    ) -> Optional[Dict]:
         try:
             details = [
                 {
@@ -206,7 +238,7 @@ class RAGAnalyzer:
                 for d in error.danh_sach_cac_loi
             ]
             return {
-                "id": f"error_c{chunk_idx}_{len(details)}",
+                "id": f"error_c{chunk_idx}_{err_idx}",
                 "original_text": error.original_text[:200],
                 "elementId": f"chunk_{chunk_idx}",
                 "elementType": "chunk",

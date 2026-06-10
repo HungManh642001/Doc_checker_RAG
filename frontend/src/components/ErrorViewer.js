@@ -2,57 +2,52 @@ import React, { useState, useMemo } from 'react';
 import { toast } from 'react-toastify';
 import './ErrorViewer.css';
 
-
-function ErrorViewer({ errors, sessionId, onApplySuggestions, onReset, loading, onPreview, onReupload }) {
-  const [selectedErrors, setSelectedErrors] = useState(new Set());
+/**
+ * ErrorViewer — hiển thị kết quả thẩm định và cho phép người dùng
+ * chấp nhận / từ chối / chỉnh sửa từng đề xuất sửa lỗi.
+ *
+ * Props:
+ *   errors: danh sách lỗi từ backend
+ *   onApplySuggestions(updates): áp dụng các sửa chữa.
+ *       updates = [{ errorId, action: 'accept'|'reject', fixedValue }]
+ *   onReset(): thẩm định tài liệu khác
+ *   loading: đang ghi file
+ */
+function ErrorViewer({ errors, onApplySuggestions, onReset, loading }) {
   const [filterSeverity, setFilterSeverity] = useState('all');
   const [expandedErrorId, setExpandedErrorId] = useState(null);
+  // statusMap[errorId] = { action: 'accept'|'reject', value: <custom suggestion> }
+  const [statusMap, setStatusMap] = useState({});
   const [editingErrorId, setEditingErrorId] = useState(null);
   const [editedText, setEditedText] = useState('');
 
+  const getStatus = (id) => statusMap[id]?.action || 'accept';
+
+  const setStatus = (id, action) => {
+    setStatusMap((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], action },
+    }));
+  };
+
   const filteredErrors = useMemo(() => {
-    return errors.filter(error => {
-      const severityMatch = filterSeverity === 'all' || error.severity === filterSeverity;
-      return severityMatch;
-    });
+    if (filterSeverity === 'all') return errors;
+    return errors.filter((e) => e.severity === filterSeverity);
   }, [errors, filterSeverity]);
 
-  const errorStats = useMemo(() => {
-    const stats = {
-      total: errors.length,
-      error: 0,
-      warning: 0,
-      info: 0
-    };
-    
-    errors.forEach(err => {
-      stats[err.severity] = (stats[err.severity] || 0) + 1;
+  const stats = useMemo(() => {
+    const s = { total: errors.length, accepted: 0, rejected: 0 };
+    errors.forEach((e) => {
+      if (getStatus(e.id) === 'reject') s.rejected += 1;
+      else s.accepted += 1;
     });
-    
-    return stats;
-  }, [errors]);
-
-  const toggleError = (errorId) => {
-    const newSelected = new Set(selectedErrors);
-    if (newSelected.has(errorId)) {
-      newSelected.delete(errorId);
-    } else {
-      newSelected.add(errorId);
-    }
-    setSelectedErrors(newSelected);
-  };
-
-  const toggleAllErrors = () => {
-    if (selectedErrors.size === filteredErrors.length) {
-      setSelectedErrors(new Set());
-    } else {
-      setSelectedErrors(new Set(filteredErrors.map(e => e.id)));
-    }
-  };
+    return s;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [errors, statusMap]);
 
   const startEdit = (error) => {
     setEditingErrorId(error.id);
-    setEditedText(error.suggestion || '');
+    setEditedText(statusMap[error.id]?.value ?? error.suggestion ?? '');
   };
 
   const cancelEdit = () => {
@@ -60,81 +55,54 @@ function ErrorViewer({ errors, sessionId, onApplySuggestions, onReset, loading, 
     setEditedText('');
   };
 
-  const applyEdit = (errorId) => {
+  const saveEdit = (errorId) => {
+    setStatusMap((prev) => ({
+      ...prev,
+      [errorId]: { action: 'accept', value: editedText },
+    }));
     setEditingErrorId(null);
-    const errorIndex = errors.findIndex(e => e.id === errorId);
-    if (errorIndex !== -1) {
-      errors[errorIndex].suggestion = editedText;
-      toast.success('Đã cập nhật đề xuất');
-    }
+    toast.success('Đã cập nhật đề xuất');
   };
 
-  const handleApplySuggestions = () => {
-    if (selectedErrors.size === 0) {
-      toast.warning('Vui lòng chọn ít nhất một lỗi để sửa chữa');
+  const handleApply = () => {
+    const updates = errors.map((e) => {
+      const st = statusMap[e.id] || {};
+      return {
+        errorId: e.id,
+        action: st.action || 'accept',
+        fixedValue: st.value, // undefined nếu không sửa tay
+      };
+    });
+
+    const acceptedCount = updates.filter((u) => u.action !== 'reject').length;
+    if (acceptedCount === 0) {
+      toast.warning('Tất cả lỗi đều bị từ chối — không có gì để ghi lại.');
       return;
     }
-
-    const acceptedErrors = Array.from(selectedErrors)
-      .map(errorId => {
-        const error = errors.find(e => e.id === errorId);
-        return {
-          elementId: error.elementId,
-          newText: error.suggestion
-        };
-      });
-
-    onApplySuggestions(acceptedErrors);
+    onApplySuggestions(updates);
   };
 
-  const getSeverityColor = (severity) => {
-    const colors = {
-      'error': '#e74c3c',
-      'warning': '#f39c12',
-      'info': '#3498db'
-    };
-    return colors[severity] || '#95a5a6';
-  };
+  const getSeverityColor = (severity) =>
+    ({ error: '#e74c3c', warning: '#f39c12', info: '#3498db' }[severity] || '#95a5a6');
 
-  const getSeverityLabel = (severity) => {
-    const labels = {
-      'error': '❌ LỖI',
-      'warning': '⚠️  CẢNH BÁO',
-      'info': 'ℹ️ THÔNG TIN'
-    };
-    return labels[severity] || severity;
-  };
-
-  const getErrorTypeLabel = (errorType) => {
-    const labels = {
-      'vi_pham_ky_hieu_don_vi': 'Ký hiệu đơn vị sai',
-      'vi_pham_ky_hieu_don_vi_khac': 'Ký hiệu không tiêu chuẩn',
-      'thieu_don_vi_do': 'Thiếu đơn vị đo',
-      'sai_dau_thap_phan': 'Sai dấu thập phân',
-      'vi_pham_don_vi_tieu_chuan': 'Đơn vị không tiêu chuẩn',
-      'vi_pham_trinh_bay_don_vi_do': 'Trình bày đơn vị sai'
-    };
-    return labels[errorType] || errorType;
-  };
+  const getSeverityLabel = (severity) =>
+    ({ error: '❌ LỖI', warning: '⚠️ CẢNH BÁO', info: 'ℹ️ THÔNG TIN' }[severity] || severity);
 
   return (
     <div className="error-viewer">
       <div className="error-header">
         <div className="header-content">
-          <h1>📋 KẾT QUẢ PHÂN TÍCH TÀI LIỆU</h1>
-          <p className="subtitle">Phân tích theo kiến trúc RAG - Kiểm tra quy định & pháp lệ</p>
+          <h1>📋 Kết quả thẩm định</h1>
+          <p className="subtitle">Đối chiếu quy định &amp; sở cứ theo kiến trúc RAG</p>
           <div className="stats">
             <span className="stat-item total">
-              📊 Tổng: <strong>{errorStats.total}</strong>
+              📊 Tổng: <strong>{stats.total}</strong>
             </span>
-            <span className="stat-item error" style={{ color: getSeverityColor('error') }}>
-              ❌ Lỗi: <strong>{errorStats.error}</strong>
+            <span className="stat-item accepted" style={{ color: '#27ae60' }}>
+              ✓ Chấp nhận: <strong>{stats.accepted}</strong>
             </span>
-            <span className="stat-item warning" style={{ color: getSeverityColor('warning') }}>
-              ⚠️ Cảnh báo: <strong>{errorStats.warning}</strong>
-            </span>
-            <span className="stat-item info" style={{ color: getSeverityColor('info') }}>
-              ℹ️ Thông tin: <strong>{errorStats.info}</strong>
+            <span className="stat-item rejected" style={{ color: '#e74c3c' }}>
+              ✕ Từ chối: <strong>{stats.rejected}</strong>
             </span>
           </div>
         </div>
@@ -150,16 +118,9 @@ function ErrorViewer({ errors, sessionId, onApplySuggestions, onReset, loading, 
             <option value="info">ℹ️ Thông tin</option>
           </select>
         </div>
-
-        <div className="filter-group">
-          <label>
-            <input
-              type="checkbox"
-              checked={selectedErrors.size === filteredErrors.length && filteredErrors.length > 0}
-              onChange={toggleAllErrors}
-            />
-            ☑️ Chọn tất cả
-          </label>
+        <div className="filter-hint">
+          Mặc định mọi lỗi được <strong>chấp nhận</strong>. Bấm <em>Từ chối</em> với lỗi bạn
+          muốn bỏ qua, hoặc <em>Chỉnh sửa</em> để tự nhập giá trị thay thế.
         </div>
       </div>
 
@@ -169,138 +130,129 @@ function ErrorViewer({ errors, sessionId, onApplySuggestions, onReset, loading, 
             <p>✅ Không phát hiện lỗi nào! Tài liệu tuân thủ quy định.</p>
           </div>
         ) : (
-          filteredErrors.map((error, index) => (
-            <div key={error.id} className="error-item" style={{
-              borderLeftColor: getSeverityColor(error.severity)
-            }}>
-              <div className="error-item-header">
-                <div className="checkbox-section">
-                  <input
-                    type="checkbox"
-                    checked={selectedErrors.has(error.id)}
-                    onChange={() => toggleError(error.id)}
-                    id={`error-${error.id}`}
-                  />
-                </div>
-
-                <div className="error-main-info">
-                  <div className="error-title-row">
-                    <label htmlFor={`error-${error.id}`}>
-                      <span className="severity-badge" style={{backgroundColor: getSeverityColor(error.severity)}}>
+          filteredErrors.map((error) => {
+            const action = getStatus(error.id);
+            const isRejected = action === 'reject';
+            const isExpanded = expandedErrorId === error.id;
+            const effectiveSuggestion = statusMap[error.id]?.value ?? error.suggestion;
+            return (
+              <div
+                key={error.id}
+                className={`error-item ${isRejected ? 'rejected' : ''}`}
+                style={{ borderLeftColor: getSeverityColor(error.severity) }}
+              >
+                <div className="error-item-header">
+                  <div className="error-main-info">
+                    <div className="error-title-row">
+                      <span
+                        className="severity-badge"
+                        style={{ backgroundColor: getSeverityColor(error.severity) }}
+                      >
                         {getSeverityLabel(error.severity)}
                       </span>
-                    </label>
-                  </div>
-                  
-                  <div className="original-text-box">
-                    <strong>📌 Nội dung gốc:</strong>
-                    <code className="original-text">{error.original_text}</code>
-                  </div>
+                      <span className={`decision-pill ${action}`}>
+                        {isRejected ? '✕ Đã từ chối' : '✓ Sẽ áp dụng'}
+                      </span>
+                    </div>
 
-                  <div className="error-list-container">
-                    <strong>🔴 Danh sách lỗi phát hiện:</strong>
-                    <div className="error-details-list">
-                      {error.danh_sach_cac_loi && error.danh_sach_cac_loi.map((err, idx) => (
-                        <div key={idx} className="error-detail-item">
-                          <div className="error-type-badge">
-                            {getErrorTypeLabel(err.error_type)}
+                    <div className="original-text-box">
+                      <strong>📌 Nội dung gốc:</strong>
+                      <code className="original-text">{error.original_text}</code>
+                    </div>
+
+                    <div className="error-list-container">
+                      <strong>🔴 Lỗi phát hiện:</strong>
+                      <div className="error-details-list">
+                        {(error.danh_sach_cac_loi || []).map((err, idx) => (
+                          <div key={idx} className="error-detail-item">
+                            <div className="error-type-badge">{err.error_type}</div>
+                            <div className="error-reasoning">
+                              <p><strong>Giải thích:</strong> {err.reasoning}</p>
+                            </div>
                           </div>
-                          <div className="error-reasoning">
-                            <p><strong>Giải thích:</strong> {err.reasoning}</p>
-                            {err.reference && (
-                              <p className="reference-text">
-                                <strong>Tham chiếu:</strong> {err.reference}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
                   </div>
+
+                  <button
+                    className="expand-btn"
+                    onClick={() => setExpandedErrorId(isExpanded ? null : error.id)}
+                  >
+                    {isExpanded ? '▼' : '▶'} Chi tiết
+                  </button>
                 </div>
 
-                <button
-                  className="expand-btn"
-                  onClick={() => setExpandedErrorId(expandedErrorId === error.id ? null : error.id)}
-                >
-                  {expandedErrorId === error.id ? '▼' : '▶'} Chi tiết
-                </button>
+                {isExpanded && (
+                  <div className="error-expanded-content">
+                    <div className="suggestion-section">
+                      <strong>💡 Đề xuất sửa chữa:</strong>
+                      {editingErrorId === error.id ? (
+                        <div className="edit-mode">
+                          <textarea
+                            value={editedText}
+                            onChange={(e) => setEditedText(e.target.value)}
+                            className="edit-textarea"
+                          />
+                          <div className="edit-buttons">
+                            <button className="btn btn-success" onClick={() => saveEdit(error.id)}>
+                              ✓ Lưu
+                            </button>
+                            <button className="btn btn-cancel" onClick={cancelEdit}>
+                              ✕ Hủy
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="suggestion-display">
+                          <code>{effectiveSuggestion}</code>
+                          <button className="btn btn-small" onClick={() => startEdit(error)}>
+                            ✏️ Chỉnh sửa
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="reference-section">
+                      <div className="reference-box">
+                        <strong>📖 Tham chiếu sở cứ:</strong>
+                        <p className="reference-location">{error.reference_location}</p>
+                        <p className="reference-quote">{error.reference_quote}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="decision-bar">
+                  <button
+                    className={`btn-decision accept ${!isRejected ? 'active' : ''}`}
+                    onClick={() => setStatus(error.id, 'accept')}
+                  >
+                    ✓ Chấp nhận
+                  </button>
+                  <button
+                    className={`btn-decision reject ${isRejected ? 'active' : ''}`}
+                    onClick={() => setStatus(error.id, 'reject')}
+                  >
+                    ✕ Từ chối
+                  </button>
+                </div>
               </div>
-
-              {expandedErrorId === error.id && (
-                <div className="error-expanded-content">
-                  <div className="suggestion-section">
-                    <strong>💡 Đề xuất sửa chữa:</strong>
-                    {editingErrorId === error.id ? (
-                      <div className="edit-mode">
-                        <textarea
-                          value={editedText}
-                          onChange={(e) => setEditedText(e.target.value)}
-                          className="edit-textarea"
-                        />
-                        <div className="edit-buttons">
-                          <button
-                            className="btn btn-success"
-                            onClick={() => applyEdit(error.id)}
-                          >
-                            ✓ Lưu
-                          </button>
-                          <button
-                            className="btn btn-cancel"
-                            onClick={cancelEdit}
-                          >
-                            ✕ Hủy
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="suggestion-display">
-                        <code>{error.suggestion}</code>
-                        <button
-                          className="btn btn-small"
-                          onClick={() => startEdit(error)}
-                        >
-                          ✏️ Chỉnh sửa
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="reference-section">
-                    <div className="reference-box">
-                      <strong>📖 Tham chiếu quy định:</strong>
-                      <p className="reference-location">{error.reference_location}</p>
-                      <p className="reference-quote">{error.reference_quote}</p>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 
       <div className="action-bar">
         <button
           className="btn btn-primary"
-          onClick={handleApplySuggestions}
-          disabled={loading || selectedErrors.size === 0}
+          onClick={handleApply}
+          disabled={loading || errors.length === 0}
         >
-          {loading ? '⏳ Đang xử lý...' : `✓ Chấp nhận ${selectedErrors.size} đề xuất`}
+          {loading ? '⏳ Đang ghi file...' : `💾 Ghi lại & tải file đã sửa (${stats.accepted})`}
         </button>
-        <button
-          className="btn btn-info"
-          onClick={() => onReupload && onReupload()}
-          disabled={loading}
-        >
-          🔁 Tái Thẩm Định
-        </button>
-        <button
-          className="btn btn-secondary"
-          onClick={onReset}
-          disabled={loading}
-        >
-          ← Quay lại
+        <button className="btn btn-secondary" onClick={onReset} disabled={loading}>
+          ← Thẩm định tài liệu khác
         </button>
       </div>
     </div>

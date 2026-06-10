@@ -15,11 +15,22 @@ api_bp = Blueprint('api', __name__, url_prefix='/api')
 # Store session metadata
 _sessions = {}
 
+# Định dạng cho tài liệu cần thẩm định & sở cứ (xây dựng tri thức)
 ALLOWED_EXTENSIONS = {'docx', 'doc', 'pdf', 'html'}
+# Định dạng cho file quy định (rules) — cho phép markdown/text/word
+ALLOWED_RULE_EXTENSIONS = {'md', 'txt', 'docx', 'doc'}
+
+
+def _ext(filename):
+    return filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
 
 
 def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return _ext(filename) in ALLOWED_EXTENSIONS
+
+
+def allowed_rule_file(filename):
+    return _ext(filename) in ALLOWED_RULE_EXTENSIONS
 
 
 @api_bp.route('/upload', methods=['POST'])
@@ -28,9 +39,11 @@ def upload_and_analyze():
     Upload documents and run analysis immediately
     
     Files expected:
-    - mainDocument: DOCX file to analyze
-    - referenceDocuments: DOCX files for building knowledge base
-    - ruleDocuments: DOCX files with regulations
+    - mainDocument: DOCX file to analyze (required)
+    - referenceDocuments: DOCX/HTML files for building the RAG knowledge base
+      (optional — falls back to bundled NĐ 86 if none)
+    - ruleDocuments: MD/TXT/DOCX files with the checking rules
+      (optional — falls back to bundled quy_dinh_chung.md if none)
     """
     try:
         # Validate main document
@@ -42,17 +55,11 @@ def upload_and_analyze():
             return jsonify({'error': 'Main document must be .docx format'}), 400
         
         # Get reference and rule documents
+        #   - referenceDocuments: sở cứ → dựng RAG index (cơ sở tri thức)
+        #   - ruleDocuments: quy định → inject vào prompt thẩm định (KHÔNG index)
         reference_docs = request.files.getlist('referenceDocuments')
         rule_docs = request.files.getlist('ruleDocuments')
-        
-        # Combine reference and rule docs
-        all_ref_docs = reference_docs + rule_docs
-        
-        if not all_ref_docs:
-            return jsonify({
-                'warning': 'No reference documents provided. Analysis may be less accurate.'
-            }), 400
-        
+
         # Create session directory
         session_id = str(uuid.uuid4())
         upload_dir = os.path.join(
@@ -67,21 +74,33 @@ def upload_and_analyze():
             main_doc.save(main_path)
             print(f"[API] Saved main document: {main_filename}")
             
-            # Save reference documents
+            # Save reference documents (sở cứ → RAG index)
             ref_paths = []
-            for ref_doc in all_ref_docs:
+            for ref_doc in reference_docs:
                 if ref_doc and ref_doc.filename and allowed_file(ref_doc.filename):
                     ref_filename = secure_filename(ref_doc.filename)
                     ref_path = os.path.join(upload_dir, f'ref_{len(ref_paths)}_{ref_filename}')
                     ref_doc.save(ref_path)
                     ref_paths.append(ref_path)
                     print(f"[API] Saved reference: {ref_filename}")
-            
-            # Tạo analyzer riêng cho session này và dựng index từ sở cứ upload
+
+            # Save rule documents (quy định → prompt thẩm định)
+            rule_paths = []
+            for rule_doc in rule_docs:
+                if rule_doc and rule_doc.filename and allowed_rule_file(rule_doc.filename):
+                    rule_filename = secure_filename(rule_doc.filename)
+                    rule_path = os.path.join(upload_dir, f'rule_{len(rule_paths)}_{rule_filename}')
+                    rule_doc.save(rule_path)
+                    rule_paths.append(rule_path)
+                    print(f"[API] Saved rule: {rule_filename}")
+
+            # Tạo analyzer riêng cho session này.
+            # Sở cứ rỗng → analyzer tự fallback sang sở cứ mặc định (NĐ 86).
+            # Quy định rỗng → analyzer tự fallback sang quy_dinh_chung.md.
             print("[API] Đang dựng index từ sở cứ...")
             analyzer = make_analyzer()
 
-            if not analyzer.initialize_rag_system(ref_paths):
+            if not analyzer.initialize_rag_system(ref_paths, rule_paths):
                 return jsonify({
                     'error': 'Failed to initialize RAG system. Check logs for details.'
                 }), 500
@@ -94,6 +113,7 @@ def upload_and_analyze():
             _sessions[session_id] = {
                 'main_path': main_path,
                 'ref_paths': ref_paths,
+                'rule_paths': rule_paths,
                 'upload_dir': upload_dir,
                 'analyzer': analyzer,
                 'errors': errors,
@@ -277,6 +297,22 @@ def cleanup_session(session_id):
                 pass
     
     return jsonify({'success': True, 'message': 'Session cleaned up'}), 200
+
+
+@api_bp.route('/rules/default', methods=['GET'])
+def get_default_rules():
+    """
+    Trả về nội dung quy định mặc định (quy_dinh_chung.md) để hiển thị/tham khảo
+    trên giao diện. Người dùng có thể xem trước trước khi quyết định upload đè.
+    """
+    try:
+        from rag.knowledge_base.rules import load_rules
+        return jsonify({
+            'success': True,
+            'rules': load_rules(),
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @api_bp.route('/health', methods=['GET'])

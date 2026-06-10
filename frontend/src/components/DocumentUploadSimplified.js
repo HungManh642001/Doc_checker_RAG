@@ -14,9 +14,28 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
   const [mainDocument, setMainDocument] = React.useState(null);
   const [referenceDocuments, setReferenceDocuments] = React.useState([]);
   const [ruleDocuments, setRuleDocuments] = React.useState([]);
+  const [defaultRules, setDefaultRules] = React.useState(null);
+  const [showDefaultRules, setShowDefaultRules] = React.useState(false);
   const fileInputMain = React.useRef(null);
   const fileInputRef = React.useRef(null);
   const fileInputRule = React.useRef(null);
+
+  const toggleDefaultRules = async () => {
+    if (showDefaultRules) {
+      setShowDefaultRules(false);
+      return;
+    }
+    if (defaultRules === null) {
+      try {
+        const res = await fetch('/api/rules/default');
+        const data = await res.json();
+        setDefaultRules(data.rules || 'Không tải được quy định mặc định.');
+      } catch (e) {
+        setDefaultRules('Không tải được quy định mặc định.');
+      }
+    }
+    setShowDefaultRules(true);
+  };
 
   const handleMainDocumentChange = (e) => {
     const files = e.target.files;
@@ -155,7 +174,8 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
             📚 Tài Liệu Sở Cứ <span className="optional">(Tùy chọn)</span>
           </h2>
           <p className="section-hint">
-            Tải lên tài liệu tham khảo để xây dựng cơ sở tri thức
+            Tài liệu tham khảo (NĐ, tiêu chuẩn...) để xây dựng cơ sở tri thức RAG. Nếu bỏ
+            trống, hệ thống dùng sở cứ mặc định (Nghị định 86/2012).
           </p>
 
           <div 
@@ -201,22 +221,30 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
             ⚖️ Quy Định / Tiêu Chuẩn <span className="optional">(Tùy chọn)</span>
           </h2>
           <p className="section-hint">
-            Tải lên các tài liệu quy định để cải thiện độ chính xác thẩm định
+            Tải lên file quy định thẩm định (vd: <code>quy_dinh_chung.md</code>). Đây là các
+            quy tắc LLM dùng để bắt lỗi. Nếu bỏ trống, hệ thống dùng quy định mặc định.
           </p>
 
-          <div 
+          <button type="button" className="link-btn" onClick={toggleDefaultRules}>
+            {showDefaultRules ? '▼ Ẩn quy định mặc định' : '▶ Xem quy định mặc định đang dùng'}
+          </button>
+          {showDefaultRules && (
+            <pre className="default-rules-preview">{defaultRules ?? 'Đang tải...'}</pre>
+          )}
+
+          <div
             className="upload-box"
             onClick={() => fileInputRule.current?.click()}
           >
             <span className="upload-icon">⚖️</span>
             <p className="upload-text">Thêm quy định / tiêu chuẩn</p>
-            <p className="upload-format">Chọn nhiều file DOCX</p>
+            <p className="upload-format">MD, TXT, DOCX</p>
           </div>
           <input
             ref={fileInputRule}
             type="file"
             multiple
-            accept=".docx,.doc"
+            accept=".md,.txt,.docx,.doc"
             onChange={handleRuleDocumentsChange}
             style={{ display: 'none' }}
           />
@@ -271,25 +299,21 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
 
         {/* Info Box */}
         <div className="info-box">
-          <strong>ℹ️ Lưu ý:</strong>
+          <strong>ℹ️ Cách hoạt động:</strong>
           <ul>
             <li>
-              <strong>Tài liệu cần thẩm định (*):</strong> Bắt buộc - DOCX file cần kiểm tra
+              <strong>Tài liệu cần thẩm định (*):</strong> Bắt buộc — file DOCX cần kiểm tra.
             </li>
             <li>
-              <strong>Tài liệu sở cứ:</strong> Từ 0+ DOCX files để xây dựng RAG index
+              <strong>Sở cứ → cơ sở tri thức:</strong> được embed &amp; lập chỉ mục RAG để
+              hệ thống truy xuất căn cứ. Bỏ trống ⇒ dùng NĐ 86/2012 mặc định.
             </li>
             <li>
-              <strong>Quy định/Tiêu chuẩn:</strong> Từ 0+ DOCX files với các quy tắc
+              <strong>Quy định → luật chấm lỗi:</strong> nội dung được đưa thẳng vào prompt
+              để LLM bắt lỗi. Bỏ trống ⇒ dùng <code>quy_dinh_chung.md</code> mặc định.
             </li>
             <li>
-              Hệ thống sẽ xây dựng RAG index từ các tài liệu sở cứ
-            </li>
-            <li>
-              Sau đó phân tích tài liệu chính dựa trên index này
-            </li>
-            <li>
-              Quá trình có thể mất vài phút tùy thuộc vào kích thước file
+              Quá trình thẩm định có thể mất vài phút tùy kích thước tài liệu &amp; sở cứ.
             </li>
           </ul>
         </div>

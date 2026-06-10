@@ -178,3 +178,49 @@
   max-width: 1000px;
   margin: 0 auto 30px;
 }
+
+/* App header */
+.app-header {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  text-align: center;
+  padding: 22px 20px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.app-header h1 {
+  margin: 0 0 6px 0;
+  font-size: 26px;
+}
+
+.app-header p {
+  margin: 0;
+  opacity: 0.9;
+  font-size: 14px;
+}
+
+/* No-errors screen (results step) */
+.no-errors-screen {
+  max-width: 700px;
+  margin: 60px auto;
+  text-align: center;
+  background: #f0fff4;
+  border-left: 4px solid #48bb78;
+  border-radius: 8px;
+  padding: 40px 24px;
+}
+
+.no-errors-screen h1 {
+  color: #22543d;
+  margin: 0 0 12px 0;
+}
+
+.no-errors-screen p {
+  color: #2f855a;
+  margin: 0 0 24px 0;
+}
+
+.download-link {
+  color: #667eea;
+  font-weight: 600;
+}
