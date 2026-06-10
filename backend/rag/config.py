@@ -28,6 +28,14 @@ def _get(name: str, default: str) -> str:
 LLM_PROVIDER = _get("LLM_PROVIDER", "litellm").strip().lower()
 
 # ---------------------------------------------------------------------------
+# MOCK MODE — giả lập kết quả thẩm định khi KHÔNG kết nối được LLM/embedding.
+# Bật để dùng thử UI & toàn bộ tính năng (highlight, sửa file, Excel, preset)
+# mà không cần LiteLLM proxy hay Ollama. Khi bật, hệ thống KHÔNG import/khởi tạo
+# llama_index — chỉ dùng heuristic bắt lỗi theo quy_dinh_chung.md.
+# ---------------------------------------------------------------------------
+MOCK_MODE = _get("MOCK_MODE", "false").strip().lower() == "true"
+
+# ---------------------------------------------------------------------------
 # LiteLLM proxy (OpenAI-compatible, qwen3-27b trên vLLM)
 # ---------------------------------------------------------------------------
 # Lưu ý: api_base PHẢI có hậu tố /v1 (route OpenAI của LiteLLM proxy).

@@ -8,11 +8,12 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from rag.knowledge_base.vector_db import build_index_in_memory, build_hybrid_retriever
+# Chỉ import các module NHẸ ở cấp cao nhất. Các module nặng phụ thuộc llama_index
+# (vector_db, audit_engine, audit_models) được import LAZY bên trong phương thức,
+# để chế độ MOCK_MODE chạy được kể cả khi không có llama_index / không kết nối được.
 from rag.knowledge_base.rules import load_rules_from_files
 from rag.document_processing.chunker import chunk_html_table
-from rag.audit_logic.audit_engine import run_audit
-from rag.audit_logic.audit_models import LoiThamDinh
+from rag.config import MOCK_MODE
 
 # Sở cứ mặc định đi kèm hệ thống (NĐ 86/2012) — dùng khi người dùng không upload sở cứ.
 _DEFAULT_REFERENCE_DIR = (
@@ -96,6 +97,7 @@ class RAGAnalyzer:
         self._client = None
         self._retriever = None   # pre-built hybrid retriever, tái dùng cho mọi chunk
         self._rules: str = ""
+        self._mock: bool = MOCK_MODE
         self.is_initialized: bool = False
 
     # ------------------------------------------------------------------
@@ -122,6 +124,18 @@ class RAGAnalyzer:
         try:
             # Quy định: ưu tiên file upload, fallback mặc định
             self._rules = load_rules_from_files(rule_docs)
+
+            # ----- MOCK MODE: bỏ qua embedding & dựng index -----
+            if self._mock:
+                print("[RAG] *** MOCK MODE *** — giả lập thẩm định, KHÔNG gọi "
+                      "LLM/embedding. Bỏ qua dựng index.")
+                self.is_initialized = True
+                return True
+
+            # Lazy import các module nặng (chỉ khi chạy thật)
+            from rag.knowledge_base.vector_db import (
+                build_index_in_memory, build_hybrid_retriever,
+            )
 
             # Sở cứ: fallback sang sở cứ mặc định nếu người dùng không upload
             if not reference_docs:
@@ -171,8 +185,10 @@ class RAGAnalyzer:
         Returns:
             list of error dicts
         """
-        if not self.is_initialized or self._index is None:
+        if not self.is_initialized:
             raise RuntimeError("RAG chưa được khởi tạo. Gọi initialize_rag_system trước.")
+        if not self._mock and self._index is None:
+            raise RuntimeError("Index chưa sẵn sàng.")
 
         try:
             print("[RAG] Đang chuyển tài liệu sang HTML...")
@@ -180,6 +196,18 @@ class RAGAnalyzer:
 
             print("[RAG] Đang chẻ nhỏ tài liệu...")
             chunks = chunk_html_table(html, chunk_size=1, header_rows_count=2)
+
+            # ----- MOCK MODE: giả lập bằng heuristic, xử lý TOÀN BỘ chunk -----
+            if self._mock:
+                from rag.audit_logic.mock_auditor import audit_document
+                print(f"[RAG] *** MOCK MODE *** giả lập thẩm định {len(chunks)} chunks...")
+                all_errors = audit_document(chunks, self._rules)
+                print(f"[RAG] Hoàn tất (mock): {len(all_errors)} lỗi giả lập.")
+                return all_errors
+
+            # ----- Chế độ thật: gọi LLM theo từng chunk -----
+            from rag.audit_logic.audit_engine import run_audit
+
             limit = min(20, len(chunks))
             print(f"[RAG] {len(chunks)} chunks, xử lý {limit} chunks đầu.")
 
@@ -226,7 +254,7 @@ class RAGAnalyzer:
     # ------------------------------------------------------------------
 
     def _transform_error(
-        self, error: LoiThamDinh, chunk_idx: int, err_idx: int = 0
+        self, error, chunk_idx: int, err_idx: int = 0
     ) -> Optional[Dict]:
         try:
             details = [
