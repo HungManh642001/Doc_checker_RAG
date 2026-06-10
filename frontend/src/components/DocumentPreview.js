@@ -1,21 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { toast } from 'react-toastify';
 import './DocumentPreview.css';
+import { fetchAndSave } from '../utils/download';
+
+const DOCX_MIME =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 /**
- * DocumentPreview — hiển thị tài liệu gốc (HTML) và HIGHLIGHT các đoạn nội dung
- * bị lỗi (khớp theo original_text của từng lỗi). Click vào vùng highlight để
- * xem chi tiết lỗi ở bảng bên phải.
+ * DocumentPreview — hiển thị tài liệu gốc (HTML) + HIGHLIGHT nội dung lỗi
+ * (khớp theo original_text). Người dùng có thể:
+ *   - Bấm vùng tô màu để xem chi tiết lỗi
+ *   - Sửa nội dung đề xuất rồi "Chấp nhận & cập nhật" → cập nhật NGAY trong văn bản
+ *   - Tải tài liệu đã sửa (chọn nơi lưu)
  *
- * Props:
- *   sessionId: id phiên (để fetch HTML tài liệu)
- *   errors: danh sách lỗi (dùng original_text để highlight)
+ * Props: sessionId, errors
  */
-const SEVERITY_LABEL = { error: '🔴 Lỗi', warning: '🟡 Cảnh báo', info: '🔵 Thông tin' };
-
 function DocumentPreview({ sessionId, errors }) {
   const [html, setHtml] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
+  const [editValue, setEditValue] = useState('');
+  const [accepted, setAccepted] = useState({}); // errorId -> fixedValue
+  const [downloading, setDownloading] = useState(false);
   const containerRef = useRef(null);
 
   // Tải HTML tài liệu
@@ -41,14 +47,13 @@ function DocumentPreview({ sessionId, errors }) {
     };
   }, [sessionId]);
 
-  // Render HTML + highlight sau khi có dữ liệu
+  // Render HTML + highlight (chạy 1 lần khi có html). Lưu nguyên văn vào data-original.
   useEffect(() => {
     const container = containerRef.current;
     if (html == null || !container) return;
 
-    container.innerHTML = html; // reset sạch mỗi lần để tránh wrap chồng
+    container.innerHTML = html;
 
-    // Sắp xếp text dài trước để tránh khớp lồng nhau một phần
     const targets = errors
       .map((e) => ({
         id: e.id,
@@ -60,14 +65,12 @@ function DocumentPreview({ sessionId, errors }) {
 
     targets.forEach((t) => highlightInNode(container, t));
 
-    // Gắn sự kiện click cho các vùng highlight
-    const marks = container.querySelectorAll('mark.err-mark');
-    marks.forEach((m) => {
+    container.querySelectorAll('mark.err-mark').forEach((m) => {
       m.style.cursor = 'pointer';
       m.onclick = () => {
         const id = m.getAttribute('data-eid');
         const err = errors.find((e) => e.id === id);
-        if (err) setSelected(err);
+        if (err) selectError(err);
         container.querySelectorAll('mark.err-mark.active').forEach((x) =>
           x.classList.remove('active')
         );
@@ -76,7 +79,89 @@ function DocumentPreview({ sessionId, errors }) {
           .forEach((x) => x.classList.add('active'));
       };
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [html, errors]);
+
+  const selectError = (err) => {
+    setSelected(err);
+    setEditValue(accepted[err.id] != null ? accepted[err.id] : err.suggestion || '');
+  };
+
+  const updateMarks = (errorId, text, fixed) => {
+    const container = containerRef.current;
+    if (!container) return;
+    container
+      .querySelectorAll(`mark.err-mark[data-eid="${cssEscape(errorId)}"]`)
+      .forEach((m) => {
+        m.textContent = text;
+        m.classList.toggle('fixed', fixed);
+      });
+  };
+
+  const acceptCurrent = () => {
+    if (!selected) return;
+    const value = (editValue || '').trim();
+    if (!value) {
+      toast.warning('Nội dung đề xuất đang trống.');
+      return;
+    }
+    setAccepted((prev) => ({ ...prev, [selected.id]: value }));
+    updateMarks(selected.id, value, true); // cập nhật ngay trong văn bản
+    toast.success('✓ Đã cập nhật trong văn bản', { autoClose: 1500 });
+  };
+
+  const undoCurrent = () => {
+    if (!selected) return;
+    const container = containerRef.current;
+    const mark = container?.querySelector(
+      `mark.err-mark[data-eid="${cssEscape(selected.id)}"]`
+    );
+    const original = mark?.getAttribute('data-original') ?? selected.original_text;
+    updateMarks(selected.id, original, false);
+    setAccepted((prev) => {
+      const next = { ...prev };
+      delete next[selected.id];
+      return next;
+    });
+    setEditValue(selected.suggestion || '');
+  };
+
+  const acceptedCount = Object.keys(accepted).length;
+
+  const downloadCorrected = async () => {
+    if (acceptedCount === 0) return;
+    setDownloading(true);
+    try {
+      const updates = Object.entries(accepted).map(([errorId, fixedValue]) => ({
+        errorId,
+        action: 'accept',
+        fixedValue,
+      }));
+      const res = await fetch(`/api/session/${sessionId}/apply-suggestions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ updates }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Ghi file thất bại');
+      }
+      const saved = await fetchAndSave(
+        `/api/session/${sessionId}/download`,
+        'tai_lieu_da_sua.docx',
+        DOCX_MIME
+      );
+      if (saved) {
+        toast.success(`✓ Đã ghi ${data.appliedCount || 0} sửa chữa & tải file.`, {
+          autoClose: 3000,
+        });
+      }
+    } catch (e) {
+      toast.error(`Không tải được file: ${e.message}`, { autoClose: 4000 });
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const matchedCount = () => {
     const c = containerRef.current;
@@ -86,19 +171,32 @@ function DocumentPreview({ sessionId, errors }) {
     return ids.size;
   };
 
+  const isAccepted = selected && accepted[selected.id] != null;
+
   return (
     <div className="doc-preview">
       <div className="doc-preview-main">
-        <div className="doc-preview-legend">
-          <span className="legend-chip sev-error">Nội dung lỗi</span>
-          <span className="legend-note">
-            Vùng được tô là nội dung bị phát hiện lỗi — bấm để xem chi tiết.
-          </span>
+        <div className="doc-preview-bar">
+          <div className="legend-group">
+            <span className="legend-chip sev-error">Nội dung lỗi</span>
+            <span className="legend-chip fixed">Đã sửa</span>
+          </div>
+          <button
+            className="btn-download-doc"
+            onClick={downloadCorrected}
+            disabled={acceptedCount === 0 || downloading}
+            title={acceptedCount === 0 ? 'Hãy chấp nhận ít nhất một sửa chữa' : ''}
+          >
+            {downloading ? '⏳ Đang tạo file…' : `💾 Tải tài liệu đã sửa (${acceptedCount})`}
+          </button>
         </div>
+
         {loading ? (
           <div className="doc-preview-loading">⏳ Đang tải tài liệu…</div>
         ) : html ? (
-          <div ref={containerRef} className="doc-preview-content" />
+          <div className="doc-preview-scroll">
+            <div ref={containerRef} className="doc-preview-content" />
+          </div>
         ) : (
           <div className="doc-preview-empty">
             Không hiển thị được tài liệu (không tạo được HTML preview).
@@ -123,10 +221,35 @@ function DocumentPreview({ sessionId, errors }) {
                 </div>
               ))}
             </div>
-            <div className="dp-section">
-              <strong>💡 Đề xuất sửa</strong>
-              <code className="dp-suggestion">{selected.suggestion}</code>
+
+            {/* Đề xuất sửa — nổi bật, có thể chỉnh sửa */}
+            <div className="dp-suggest-card">
+              <div className="dp-suggest-head">💡 Đề xuất sửa</div>
+              <textarea
+                className="dp-suggest-input"
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                rows={3}
+              />
+              <div className="dp-suggest-actions">
+                {isAccepted ? (
+                  <>
+                    <span className="dp-applied">✓ Đã áp dụng vào văn bản</span>
+                    <button className="dp-btn ghost" onClick={undoCurrent}>
+                      ↩︎ Hoàn tác
+                    </button>
+                    <button className="dp-btn primary" onClick={acceptCurrent}>
+                      ↻ Cập nhật lại
+                    </button>
+                  </>
+                ) : (
+                  <button className="dp-btn primary" onClick={acceptCurrent}>
+                    ✓ Chấp nhận &amp; cập nhật
+                  </button>
+                )}
+              </div>
             </div>
+
             <div className="dp-section">
               <strong>📖 Tham chiếu sở cứ</strong>
               <p className="dp-ref-loc">{selected.reference_location}</p>
@@ -135,7 +258,7 @@ function DocumentPreview({ sessionId, errors }) {
           </div>
         ) : (
           <div className="dp-no-selection">
-            <p>👆 Bấm vào một vùng được tô màu trong tài liệu để xem chi tiết lỗi.</p>
+            <p>👆 Bấm vào một vùng được tô màu trong tài liệu để xem &amp; sửa lỗi.</p>
             <p className="dp-hint">
               Đã đánh dấu <strong>{matchedCount()}</strong>/{errors.length} lỗi trong tài liệu.
               {matchedCount() < errors.length &&
@@ -174,6 +297,7 @@ function highlightInNode(root, target) {
     const mark = document.createElement('mark');
     mark.className = `err-mark sev-${target.severity}`;
     mark.setAttribute('data-eid', target.id);
+    mark.setAttribute('data-original', after.nodeValue); // lưu để hoàn tác
     mark.textContent = after.nodeValue;
     after.parentNode.replaceChild(mark, after);
   });

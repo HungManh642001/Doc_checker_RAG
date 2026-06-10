@@ -14,7 +14,6 @@ import './ErrorViewer.css';
  *   loading: đang ghi file
  */
 function ErrorViewer({ errors, onApplySuggestions, onReset, loading }) {
-  const [filterSeverity, setFilterSeverity] = useState('all');
   const [expandedErrorId, setExpandedErrorId] = useState(null);
   // statusMap[errorId] = { action: 'accept'|'reject', value: <custom suggestion> }
   const [statusMap, setStatusMap] = useState({});
@@ -30,10 +29,7 @@ function ErrorViewer({ errors, onApplySuggestions, onReset, loading }) {
     }));
   };
 
-  const filteredErrors = useMemo(() => {
-    if (filterSeverity === 'all') return errors;
-    return errors.filter((e) => e.severity === filterSeverity);
-  }, [errors, filterSeverity]);
+  const filteredErrors = errors;
 
   const stats = useMemo(() => {
     const s = { total: errors.length, accepted: 0, rejected: 0 };
@@ -109,15 +105,6 @@ function ErrorViewer({ errors, onApplySuggestions, onReset, loading }) {
       </div>
 
       <div className="filter-section">
-        <div className="filter-group">
-          <label>🔍 Lọc theo mức độ:</label>
-          <select value={filterSeverity} onChange={(e) => setFilterSeverity(e.target.value)}>
-            <option value="all">Tất cả</option>
-            <option value="error">❌ Lỗi</option>
-            <option value="warning">⚠️ Cảnh báo</option>
-            <option value="info">ℹ️ Thông tin</option>
-          </select>
-        </div>
         <div className="filter-hint">
           Mặc định mọi lỗi được <strong>chấp nhận</strong>. Bấm <em>Từ chối</em> với lỗi bạn
           muốn bỏ qua, hoặc <em>Chỉnh sửa</em> để tự nhập giá trị thay thế.

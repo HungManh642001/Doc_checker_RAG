@@ -3,8 +3,14 @@ import './AppSimplified.css';
 import DocumentUploadSimplified from './components/DocumentUploadSimplified';
 import ErrorViewer from './components/ErrorViewer';
 import DocumentPreview from './components/DocumentPreview';
+import { fetchAndSave } from './utils/download';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
+
+const XLSX_MIME =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const DOCX_MIME =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 /**
  * AppSimplified - Luồng thẩm định RAG đơn giản hoá
@@ -48,34 +54,49 @@ function App() {
    * Áp dụng các sửa chữa. `updates` đến trực tiếp từ ErrorViewer:
    *   [{ errorId, action: 'accept'|'reject', fixedValue }]
    */
-  const handleApplySuggestions = (updates) => {
+  const handleApplySuggestions = async (updates) => {
     setLoading(true);
-
-    fetch(`/api/session/${sessionId}/apply-suggestions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ updates }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        setLoading(false);
-        if (data.success) {
-          setAppliedCount(data.appliedCount || 0);
-          setDownloadUrl(data.downloadUrl || null);
-          toast.success(`✓ Đã ghi ${data.appliedCount || 0} sửa chữa.`, { autoClose: 3000 });
-          // Tự động tải file đã sửa (nếu có)
-          if (data.downloadUrl) {
-            window.location.href = data.downloadUrl;
-          }
-          setStep('complete');
-        } else {
-          toast.error(data.error || 'Ghi file thất bại', { autoClose: 3000 });
-        }
-      })
-      .catch((err) => {
-        setLoading(false);
-        toast.error(`✗ Lỗi: ${err.message}`, { autoClose: 3000 });
+    try {
+      const res = await fetch(`/api/session/${sessionId}/apply-suggestions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ updates }),
       });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Ghi file thất bại');
+      }
+
+      setAppliedCount(data.appliedCount || 0);
+      setDownloadUrl(data.downloadUrl || null);
+      toast.success(`✓ Đã ghi ${data.appliedCount || 0} sửa chữa.`, { autoClose: 3000 });
+
+      // Tải file đã sửa — cho người dùng chọn nơi lưu
+      if (data.downloadUrl && data.appliedCount > 0) {
+        try {
+          await fetchAndSave(data.downloadUrl, 'tai_lieu_da_sua.docx', DOCX_MIME);
+        } catch (e) {
+          toast.error(`Không tải được file: ${e.message}`, { autoClose: 4000 });
+        }
+      }
+      setStep('complete');
+    } catch (err) {
+      toast.error(`✗ Lỗi: ${err.message}`, { autoClose: 3000 });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    try {
+      await fetchAndSave(
+        `/api/session/${sessionId}/report.xlsx`,
+        'bao_cao_tham_dinh.xlsx',
+        XLSX_MIME
+      );
+    } catch (e) {
+      toast.error(`Không xuất được Excel: ${e.message}`, { autoClose: 4000 });
+    }
   };
 
   const handleReset = () => {
@@ -126,12 +147,9 @@ function App() {
                       📄 Xem trên tài liệu
                     </button>
                   </div>
-                  <a
-                    className="btn btn-excel"
-                    href={`/api/session/${sessionId}/report.xlsx`}
-                  >
+                  <button className="btn btn-excel" onClick={handleExportExcel}>
                     📊 Xuất Excel
-                  </a>
+                  </button>
                 </div>
 
                 {view === 'list' ? (
@@ -163,13 +181,19 @@ function App() {
             <div className="complete-message">
               <h1>✓ Hoàn tất</h1>
               <p>Đã ghi {appliedCount} sửa chữa vào tài liệu.</p>
-              {downloadUrl && (
+              {downloadUrl && appliedCount > 0 && (
                 <p>
-                  Nếu file chưa tự tải,{' '}
-                  <a href={downloadUrl} className="download-link">
-                    bấm vào đây để tải lại
-                  </a>
-                  .
+                  <button
+                    type="button"
+                    className="download-link-btn"
+                    onClick={() =>
+                      fetchAndSave(downloadUrl, 'tai_lieu_da_sua.docx', DOCX_MIME).catch((e) =>
+                        toast.error(`Không tải được file: ${e.message}`, { autoClose: 4000 })
+                      )
+                    }
+                  >
+                    ⬇️ Tải lại tài liệu đã sửa
+                  </button>
                 </p>
               )}
               <button className="btn btn-primary" onClick={handleReset}>
