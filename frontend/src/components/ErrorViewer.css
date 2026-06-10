@@ -54,6 +54,15 @@
   background: rgba(52, 152, 219, 0.2);
 }
 
+.stat-item.type {
+  background: rgba(255, 255, 255, 0.12);
+  font-weight: 500;
+}
+
+.stat-item.type strong {
+  font-size: 15px;
+}
+
 .stat-item.error {
   background: rgba(231, 76, 60, 0.2);
 }

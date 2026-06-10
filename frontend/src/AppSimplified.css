@@ -240,10 +240,16 @@
   background: #1d4ed8;
 }
 
-/* Results toolbar: view switch + export */
+/* Results toolbar: reset + view switch + export (dính ở đầu khi cuộn) */
 .results-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   max-width: 1100px;
   margin: 0 auto 18px;
+  padding: 12px 0;
+  background: #fff;
+  border-bottom: 1px solid #edf2f7;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -288,10 +294,28 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  border: none;
+  cursor: pointer;
 }
 
 .btn-excel:hover {
   background: #155d37;
+}
+
+.btn-reset {
+  background: #edf2f7;
+  color: #4a5568;
+  border: 1px solid #cbd5e0;
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.btn-reset:hover {
+  background: #e2e8f0;
+  border-color: #a0aec0;
 }
 
 .results-container > .error-viewer,

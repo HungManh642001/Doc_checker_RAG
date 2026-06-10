@@ -9,32 +9,25 @@ import 'react-toastify/dist/ReactToastify.css';
 
 const XLSX_MIME =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-const DOCX_MIME =
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 /**
  * AppSimplified - Luồng thẩm định RAG đơn giản hoá
  *
  * Flow:
- * 1. Upload tài liệu chính + sở cứ + quy định
- * 2. Hệ thống RAG thẩm định ngay
- * 3. ErrorViewer hiển thị lỗi, người dùng chấp nhận/từ chối/sửa
- * 4. Ghi file đã sửa → tải về
+ * 1. Upload tài liệu chính + sở cứ + quy định → hệ thống thẩm định ngay
+ * 2. Kết quả: xem dưới dạng "Danh sách lỗi" (báo cáo) hoặc "Xem trên tài liệu"
+ *    (sửa trực tiếp & tải file đã sửa). Xuất Excel danh sách lỗi.
  */
 function App() {
   const [sessionId, setSessionId] = React.useState(null);
-  const [step, setStep] = React.useState('upload'); // 'upload' | 'results' | 'complete'
+  const [step, setStep] = React.useState('upload'); // 'upload' | 'results'
   const [errors, setErrors] = React.useState([]);
   const [loading, setLoading] = React.useState(false);
-  const [errorCount, setErrorCount] = React.useState(0);
-  const [appliedCount, setAppliedCount] = React.useState(0);
-  const [downloadUrl, setDownloadUrl] = React.useState(null);
   const [view, setView] = React.useState('list'); // 'list' | 'document'
 
   const handleUploadComplete = (newSessionId, analysisErrors) => {
     setSessionId(newSessionId);
     setErrors(analysisErrors || []);
-    setErrorCount(analysisErrors?.length || 0);
 
     if (analysisErrors && analysisErrors.length > 0) {
       toast.success(`✓ Thẩm định hoàn tất! Phát hiện ${analysisErrors.length} lỗi.`, {
@@ -48,43 +41,6 @@ function App() {
       });
     }
     setStep('results');
-  };
-
-  /**
-   * Áp dụng các sửa chữa. `updates` đến trực tiếp từ ErrorViewer:
-   *   [{ errorId, action: 'accept'|'reject', fixedValue }]
-   */
-  const handleApplySuggestions = async (updates) => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/session/${sessionId}/apply-suggestions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ updates }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Ghi file thất bại');
-      }
-
-      setAppliedCount(data.appliedCount || 0);
-      setDownloadUrl(data.downloadUrl || null);
-      toast.success(`✓ Đã ghi ${data.appliedCount || 0} sửa chữa.`, { autoClose: 3000 });
-
-      // Tải file đã sửa — cho người dùng chọn nơi lưu
-      if (data.downloadUrl && data.appliedCount > 0) {
-        try {
-          await fetchAndSave(data.downloadUrl, 'tai_lieu_da_sua.docx', DOCX_MIME);
-        } catch (e) {
-          toast.error(`Không tải được file: ${e.message}`, { autoClose: 4000 });
-        }
-      }
-      setStep('complete');
-    } catch (err) {
-      toast.error(`✗ Lỗi: ${err.message}`, { autoClose: 3000 });
-    } finally {
-      setLoading(false);
-    }
   };
 
   const handleExportExcel = async () => {
@@ -108,9 +64,6 @@ function App() {
     setSessionId(null);
     setStep('upload');
     setErrors([]);
-    setErrorCount(0);
-    setAppliedCount(0);
-    setDownloadUrl(null);
     setView('list');
   };
 
@@ -133,6 +86,10 @@ function App() {
             {errors.length > 0 ? (
               <>
                 <div className="results-toolbar">
+                  <button className="btn btn-reset" onClick={handleReset}>
+                    ← Thẩm định tài liệu khác
+                  </button>
+
                   <div className="view-switch">
                     <button
                       className={`switch-btn ${view === 'list' ? 'active' : ''}`}
@@ -147,18 +104,14 @@ function App() {
                       📄 Xem trên tài liệu
                     </button>
                   </div>
+
                   <button className="btn btn-excel" onClick={handleExportExcel}>
                     📊 Xuất Excel
                   </button>
                 </div>
 
                 {view === 'list' ? (
-                  <ErrorViewer
-                    errors={errors}
-                    onApplySuggestions={handleApplySuggestions}
-                    onReset={handleReset}
-                    loading={loading}
-                  />
+                  <ErrorViewer errors={errors} />
                 ) : (
                   <DocumentPreview sessionId={sessionId} errors={errors} />
                 )}
@@ -172,34 +125,6 @@ function App() {
                 </button>
               </div>
             )}
-          </div>
-        );
-
-      case 'complete':
-        return (
-          <div className="app-container complete-container">
-            <div className="complete-message">
-              <h1>✓ Hoàn tất</h1>
-              <p>Đã ghi {appliedCount} sửa chữa vào tài liệu.</p>
-              {downloadUrl && appliedCount > 0 && (
-                <p>
-                  <button
-                    type="button"
-                    className="download-link-btn"
-                    onClick={() =>
-                      fetchAndSave(downloadUrl, 'tai_lieu_da_sua.docx', DOCX_MIME).catch((e) =>
-                        toast.error(`Không tải được file: ${e.message}`, { autoClose: 4000 })
-                      )
-                    }
-                  >
-                    ⬇️ Tải lại tài liệu đã sửa
-                  </button>
-                </p>
-              )}
-              <button className="btn btn-primary" onClick={handleReset}>
-                Thẩm định tài liệu khác
-              </button>
-            </div>
           </div>
         );
 
