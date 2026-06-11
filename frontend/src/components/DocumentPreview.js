@@ -128,17 +128,20 @@ function DocumentPreview({ sessionId, errors }) {
     setEditValue(selected.suggestion || '');
   };
 
-  // Mở chatbot và điền sẵn câu hỏi về thông số đang chọn (NGUỒN A: YCKT cũ).
+  // Mở chatbot và điền sẵn câu hỏi ĐỐI CHIẾU thiết bị/vật liệu (mục) đang chọn
+  // với cùng thiết bị (hoặc tương tự) trong các YCKT trước đây.
   const askAboutSelected = () => {
     if (!selected) return;
     const param = (selected.original_text || '').trim();
     const sec = (selected.section || '').trim();
-    const where = sec ? ` (mục "${sec}")` : '';
+    const device = sec || 'thiết bị/vật liệu này';
     setChatPrefill({
       question:
-        `Thông số "${param}"${where} đã từng xuất hiện trong các YCKT trước đây ` +
-        `chưa? Nếu có thì giá trị là bao nhiêu, có tham khảo được cho tài liệu này không?`,
-      focusParam: sec ? `${param} — ${sec}` : param,
+        `Thiết bị/vật liệu "${device}" trong tài liệu đang xét có thông số/giá trị ` +
+        `"${param}". Trong các YCKT trước đây, thiết bị/vật liệu này (hoặc tương tự) ` +
+        `có các thông số tương ứng là gì, giá trị bao nhiêu? Giá trị hiện tại có phù ` +
+        `hợp và nhất quán với trước đây không?`,
+      focusParam: sec ? `${sec} — ${param}` : param,
     });
   };
 

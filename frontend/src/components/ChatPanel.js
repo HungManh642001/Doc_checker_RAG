@@ -14,6 +14,14 @@ import './ChatPanel.css';
  *                "Hỏi về thông số này"). Tuỳ chọn.
  *   - onConsumePrefill: callback báo đã dùng xong prefill (để cha xoá state).
  */
+// Câu hỏi gợi ý — giúp khám phá các loại câu hỏi tra cứu/đối chiếu YCKT trước đây.
+const SUGGESTIONS = [
+  'Liệt kê các thiết bị/vật liệu có trong các YCKT trước đây.',
+  'Các thông số của thiết bị trong tài liệu này có phù hợp với YCKT trước đây không?',
+  'Thiết bị này từng được dùng với dải giá trị nào trong các YCKT trước đây?',
+  'So sánh thông số tài liệu đang xét với thiết bị tương ứng ở YCKT trước đây.',
+];
+
 function ChatPanel({ sessionId, prefill, onConsumePrefill }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]); // {role, content, citations?, error?}
@@ -112,10 +120,25 @@ function ChatPanel({ sessionId, prefill, onConsumePrefill }) {
       <div className="chat-messages" ref={listRef}>
         {messages.length === 0 ? (
           <div className="chat-empty">
-            <p>👋 Hỏi xem một thông số đã từng dùng trong các YCKT trước đây chưa.</p>
+            <p>👋 Tra cứu & đối chiếu thiết bị/vật liệu với các YCKT trước đây.</p>
             <p className="chat-empty-hint">
-              Ví dụ: <em>"Áp suất van xả áp đã từng dùng giá trị nào?"</em>
+              Mỗi mục trong bảng (vd "1.1 Van xả áp") là một thiết bị/vật liệu. Bấm
+              một câu hỏi gợi ý để bắt đầu:
             </p>
+            <div className="chat-suggestions">
+              {SUGGESTIONS.map((s, i) => (
+                <button
+                  key={i}
+                  className="chat-suggestion"
+                  onClick={() => {
+                    setInput(s);
+                    inputRef.current?.focus();
+                  }}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
           </div>
         ) : (
           messages.map((m, i) => (

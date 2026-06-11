@@ -372,9 +372,9 @@ class RAGAnalyzer:
                 html_docs, collection_name="yckt_history"
             )
             self._history_retriever = build_hybrid_retriever(
-                self._history_index, nodes, top_k=6
+                self._history_index, nodes, top_k=8
             )
-            print(f"[RAG] Kho YCKT lịch sử sẵn sàng ({len(nodes)} dòng thông số).")
+            print(f"[RAG] Kho YCKT lịch sử sẵn sàng ({len(nodes)} mục thiết bị).")
         except Exception as e:  # noqa: BLE001
             print(f"[RAG] Không dựng được kho YCKT lịch sử: {e}")
             self._history_index = self._history_client = self._history_retriever = None
@@ -390,9 +390,9 @@ class RAGAnalyzer:
                 [(main_html, doc_name)], collection_name="current_doc"
             )
             self._current_retriever = build_hybrid_retriever(
-                self._current_index, nodes, top_k=6
+                self._current_index, nodes, top_k=8
             )
-            print(f"[RAG] Index tài liệu hiện tại sẵn sàng ({len(nodes)} dòng).")
+            print(f"[RAG] Index tài liệu hiện tại sẵn sàng ({len(nodes)} mục thiết bị).")
         except Exception as e:  # noqa: BLE001
             print(f"[RAG] Không dựng được index tài liệu hiện tại: {e}")
             self._current_index = self._current_client = self._current_retriever = None
