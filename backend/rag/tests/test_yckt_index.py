@@ -13,6 +13,24 @@ embedding nên không kiểm ở đây.
 from rag.document_processing.chunker import (
     row_chunk_to_fields,
     build_yckt_row_payload,
+    build_yckt_section_payload,
+    chunk_html_table,
+    extract_muc,
+)
+
+
+# Bảng YCKT có 1 mục 'Van xả áp' với 4 dòng thông số (mô phỏng cấu trúc thật)
+SECTION_TABLE = (
+    "<table>"
+    "<tr><th>TT</th><th>Tên yêu cầu</th><th>Giá trị yêu cầu</th></tr>"
+    "<tr><th></th><th>Tên</th><th>Giá trị</th></tr>"
+    "<tr><td>1</td><td colspan='2'>Bộ công cụ dụng cụ</td></tr>"
+    "<tr><td>1.1</td><td colspan='2'>Van xả áp</td></tr>"
+    "<tr><td>1.1.1</td><td>Môi chất áp dụng</td><td>Khí nén</td></tr>"
+    "<tr><td>1.1.2</td><td>Kích thước cổng kết nối</td><td>D=3/8</td></tr>"
+    "<tr><td>1.1.3</td><td>Áp suất hoạt động</td><td>0,3 đến 0,95 MPa</td></tr>"
+    "<tr><td>1.1.4</td><td>Nhiệt độ hoạt động</td><td>-4 đến 55 C</td></tr>"
+    "</table>"
 )
 
 
@@ -94,10 +112,51 @@ def test_build_yckt_row_payload_no_section():
     print("[OK] test_build_yckt_row_payload_no_section")
 
 
+def test_section_grouping_one_chunk_per_section():
+    """chunk_html_table(chunk_size lớn) gom cả mục 'Van xả áp' vào 1 chunk."""
+    chunks = chunk_html_table(SECTION_TABLE, chunk_size=40, header_rows_count=2)
+    van = [c for c in chunks if extract_muc(c) == "1.1 Van xả áp"]
+    assert len(van) == 1, f"Kỳ vọng 1 chunk cho mục Van xả áp, được {len(van)}"
+    print("[OK] test_section_grouping_one_chunk_per_section")
+
+
+def test_build_yckt_section_payload_full_section():
+    """Payload theo mục phải gom ĐỦ 4 dòng thông số của 'Van xả áp'."""
+    chunks = chunk_html_table(SECTION_TABLE, chunk_size=40, header_rows_count=2)
+    van_chunk = next(c for c in chunks if extract_muc(c) == "1.1 Van xả áp")
+
+    payload = build_yckt_section_payload(van_chunk, "YCKT_2024.docx")
+    assert payload is not None
+    assert payload["metadata"]["section"] == "1.1 Van xả áp"
+    assert payload["metadata"]["row_count"] == 4, payload["metadata"]["row_count"]
+
+    text = payload["text_for_llm"]
+    # đủ cả 4 thông số trong cùng một node
+    for p in ("Môi chất áp dụng", "Kích thước cổng kết nối",
+              "Áp suất hoạt động", "Nhiệt độ hoạt động"):
+        assert p in text, f"Thiếu '{p}' trong node mục"
+    assert "0,3 đến 0,95 MPa" in text
+    # embed_source nêu tên mục + tên/giá trị các dòng (để query 'Van xả áp' khớp)
+    assert "Van xả áp" in payload["embed_source"]
+    assert "Áp suất hoạt động" in payload["embed_source"]
+    # param_name gộp danh sách các thông số con
+    assert "Áp suất hoạt động" in payload["metadata"]["param_name"]
+    print("[OK] test_build_yckt_section_payload_full_section")
+
+
+def test_build_yckt_section_payload_empty():
+    only_header = "<table><tr><th>TT</th></tr><tr><td>   </td></tr></table>"
+    assert build_yckt_section_payload(only_header, "empty.docx") is None
+    print("[OK] test_build_yckt_section_payload_empty")
+
+
 if __name__ == "__main__":
     test_row_chunk_to_fields()
     test_row_chunk_to_fields_no_data()
     test_build_yckt_row_payload()
     test_build_yckt_row_payload_empty()
     test_build_yckt_row_payload_no_section()
-    print("\nTất cả test bước 1 PASSED.")
+    test_section_grouping_one_chunk_per_section()
+    test_build_yckt_section_payload_full_section()
+    test_build_yckt_section_payload_empty()
+    print("\nTất cả test bước 1+ PASSED.")

@@ -101,6 +101,74 @@ def build_yckt_row_payload(html_chunk: str, doc_name: str) -> Optional[Dict[str,
     }
 
 
+def build_yckt_section_payload(html_chunk: str, doc_name: str) -> Optional[Dict[str, object]]:
+    """
+    Dựng payload cho một node YCKT theo MỤC — gom TOÀN BỘ dòng thông số trong cùng
+    một đề mục (vd 'Van xả áp' gồm 1.1.1..1.1.4) vào MỘT node.
+
+    Lý do: người dùng thường hỏi theo cụm thiết bị/đề mục ('Van xả áp') chứ không
+    theo từng dòng. Gom theo mục giúp retriever trả về đầy đủ thông tin của mục đó
+    thay vì vài dòng rời rạc.
+
+    Dùng kèm chunk_html_table(chunk_size lớn) để mỗi chunk = một mục (tự cắt ở dòng
+    section header).
+
+    Returns:
+        None nếu chunk không có dòng dữ liệu nào, ngược lại:
+        {
+          "text_for_llm": <chuỗi LLM đọc: tiêu đề nguồn + TẤT CẢ dòng của mục>,
+          "embed_source": <Mục + (Tên + Giá trị) của mọi dòng — để embed>,
+          "metadata": {doc_name, section, param_name (gộp), param_value, row_count},
+        }
+    """
+    section = extract_muc(html_chunk)
+    soup = BeautifulSoup(html_chunk, 'html.parser')
+
+    data_rows: List[List[str]] = []
+    for row in soup.find_all('tr'):
+        if row.find('th'):
+            continue  # bỏ dòng header
+        tds = row.find_all('td', recursive=False)
+        texts = [c.get_text(separator=' ', strip=True) for c in tds]
+        if any(texts):
+            data_rows.append(texts)
+
+    if not data_rows:
+        return None
+
+    lines: List[str] = []
+    param_names: List[str] = []
+    embed_bits: List[str] = []
+    if section:
+        embed_bits.append(section)
+
+    for cells in data_rows:
+        lines.append(' | '.join(c for c in cells if c))
+        if len(cells) > 1 and cells[1]:
+            param_names.append(cells[1])
+        # embed tập trung Tên + Giá trị (cột 2,3), bỏ cột boilerplate
+        embed_bits.append(' '.join(c for c in cells[1:3] if c))
+
+    embed_source = '. '.join(b for b in embed_bits if b and b.strip())
+    if not embed_source.strip():
+        return None
+
+    ctx = f' | Mục: {section}' if section else ''
+    text_for_llm = f'[Tài liệu: {doc_name}{ctx}]\n' + '\n'.join(lines)
+
+    return {
+        'text_for_llm': text_for_llm,
+        'embed_source': embed_source,
+        'metadata': {
+            'doc_name': doc_name,
+            'section': section,
+            'param_name': '; '.join(param_names),
+            'param_value': '',
+            'row_count': len(data_rows),
+        },
+    }
+
+
 def chunk_html_table(
     html_content: str,
     chunk_size: int = 1,
