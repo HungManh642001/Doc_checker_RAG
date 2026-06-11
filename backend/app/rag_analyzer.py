@@ -264,6 +264,47 @@ class RAGAnalyzer:
             traceback.print_exc()
             return []
 
+    def answer_question(
+        self,
+        question: str,
+        history: Optional[List[Dict]] = None,
+        focus_param: Optional[str] = None,
+        top_k: int = 6,
+    ) -> Dict:
+        """
+        Trả lời câu hỏi chatbot bằng RAG trên kho YCKT lịch sử (NGUỒN A) và
+        tài liệu đang xét (NGUỒN B).
+
+        Args:
+            question: câu hỏi của người thẩm định.
+            history: lịch sử hội thoại [{"role": "user"|"assistant", "content": str}].
+            focus_param: thông số đang quan tâm (vd khi bấm 'Hỏi về thông số này').
+
+        Returns:
+            {"answer": str, "citations": [...]}
+        """
+        if not self.is_initialized:
+            raise RuntimeError("RAG chưa được khởi tạo. Gọi initialize_rag_system trước.")
+
+        if self._mock:
+            return {
+                "answer": (
+                    "Chatbot hỏi-đáp cần chế độ LLM thật (hãy tắt MOCK_MODE và "
+                    "kết nối LiteLLM/Ollama)."
+                ),
+                "citations": [],
+            }
+
+        from rag.chat.qa_engine import answer_question as _answer
+        return _answer(
+            question,
+            history_retriever=self._history_retriever,
+            current_retriever=self._current_retriever,
+            history=history,
+            focus_param=focus_param,
+            top_k=top_k,
+        )
+
     def cleanup(self) -> None:
         """Đóng Qdrant client và giải phóng tài nguyên."""
         for client in (self._client, self._history_client, self._current_client):

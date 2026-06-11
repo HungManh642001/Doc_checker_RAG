@@ -379,6 +379,56 @@ def download_corrected(session_id):
     return send_file(corrected_path, as_attachment=True, download_name=download_name)
 
 
+@api_bp.route('/session/<session_id>/chat', methods=['POST'])
+def chat(session_id):
+    """
+    Hỏi-đáp với chatbot trong DocumentPreview.
+
+    Trả lời dựa trên kho YCKT lịch sử (upload kèm session) và tài liệu đang xét.
+
+    Expected JSON:
+    {
+        "question": "Áp suất van xả áp đã từng dùng giá trị nào?",
+        "history": [{"role": "user"|"assistant", "content": "..."}],  // tuỳ chọn
+        "focusParam": "Áp suất hoạt động 0,3 đến 0,95 MPa"            // tuỳ chọn
+    }
+
+    Response:
+    {
+        "success": true,
+        "answer": "...",
+        "citations": [
+            {"source", "doc_name", "section", "param_name", "param_value", "score"}
+        ]
+    }
+    """
+    if session_id not in _sessions:
+        return jsonify({'error': 'Session not found'}), 404
+
+    data = request.get_json(silent=True) or {}
+    question = (data.get('question') or '').strip()
+    if not question:
+        return jsonify({'error': 'Trường "question" là bắt buộc'}), 400
+
+    history = data.get('history') or []
+    focus_param = data.get('focusParam')
+
+    analyzer = _sessions[session_id].get('analyzer')
+    if analyzer is None:
+        return jsonify({'error': 'Session chưa sẵn sàng (thiếu analyzer)'}), 409
+
+    try:
+        result = analyzer.answer_question(
+            question, history=history, focus_param=focus_param
+        )
+        return jsonify({'success': True, **result}), 200
+    except Exception as e:
+        print(f"[API] Lỗi chat: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @api_bp.route('/session/<session_id>/cleanup', methods=['DELETE'])
 def cleanup_session(session_id):
     """
