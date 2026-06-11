@@ -9,7 +9,7 @@ thứ tự, không gọi LLM. RAGAnalyzer import được mà không cần llama
 module nặng chỉ import lazy bên trong phương thức.
 """
 
-from app.rag_analyzer import RAGAnalyzer
+from app.rag_analyzer import RAGAnalyzer, clean_doc_name
 
 
 # --- Đối tượng lỗi giả mô phỏng pydantic model LoiThamDinh/ChiTietLoi ---
@@ -82,8 +82,22 @@ def test_assemble_empty():
     print("[OK] test_assemble_empty")
 
 
+def test_clean_doc_name():
+    # Ưu tiên tên gốc (giữ dấu tiếng Việt)
+    assert clean_doc_name(
+        "/up/hist_0_M_u_YCKT.docx", "Mẫu YCKT đầu vào_1.docx"
+    ) == "Mẫu YCKT đầu vào_1.docx"
+    # Không có tên gốc → strip tiền tố upload
+    assert clean_doc_name("/up/hist_0_M_u_YCKT.docx") == "M_u_YCKT.docx"
+    assert clean_doc_name("/up/ref_12_NĐ86.docx") == "NĐ86.docx"
+    # Không có tiền tố → giữ nguyên basename
+    assert clean_doc_name("/up/bao_cao.docx") == "bao_cao.docx"
+    print("[OK] test_clean_doc_name")
+
+
 if __name__ == "__main__":
     test_assemble_preserves_order_and_ids()
     test_assemble_skips_failed_chunks()
     test_assemble_empty()
+    test_clean_doc_name()
     print("\nTất cả test song song-hoá PASSED.")

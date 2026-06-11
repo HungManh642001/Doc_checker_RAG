@@ -166,7 +166,10 @@ def upload_and_analyze():
                     print(f"[API] Saved rule: {rule_filename}")
 
             # Save history documents (YCKT cũ → kho tra cứu cho chatbot)
+            # Giữ TÊN GỐC (history_names) để hiển thị/viện dẫn — tên file lưu đã bị
+            # secure_filename làm mất dấu tiếng Việt + thêm tiền tố hist_N_.
             history_paths = []
+            history_names = {}
             for hist_doc in history_docs:
                 if hist_doc and hist_doc.filename and allowed_file(hist_doc.filename):
                     hist_filename = secure_filename(hist_doc.filename)
@@ -175,7 +178,8 @@ def upload_and_analyze():
                     )
                     hist_doc.save(hist_path)
                     history_paths.append(hist_path)
-                    print(f"[API] Saved history YCKT: {hist_filename}")
+                    history_names[hist_path] = hist_doc.filename  # tên gốc người dùng
+                    print(f"[API] Saved history YCKT: {hist_doc.filename}")
 
             # --- Lưu các file VỪA UPLOAD thành preset (trước khi trộn preset cũ) ---
             if request.form.get('savePresets', '').lower() == 'true':
@@ -196,7 +200,9 @@ def upload_and_analyze():
             print("[API] Đang dựng index từ sở cứ...")
             analyzer = make_analyzer()
 
-            if not analyzer.initialize_rag_system(ref_paths, rule_paths, history_paths):
+            if not analyzer.initialize_rag_system(
+                ref_paths, rule_paths, history_paths, history_names
+            ):
                 return jsonify({
                     'error': 'Failed to initialize RAG system. Check logs for details.'
                 }), 500

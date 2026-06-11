@@ -5,10 +5,27 @@ sau đó thẩm định tài liệu đầu vào theo từng chunk.
 """
 
 import os
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+# Tiền tố do API gắn khi lưu file upload (ref_0_, rule_1_, hist_2_...). Khi không có
+# tên gốc, ta strip tiền tố này để tên tài liệu hiển thị/viện dẫn đỡ xấu.
+_UPLOAD_PREFIX_RE = re.compile(r'^(?:ref|rule|hist)_\d+_')
+
+
+def clean_doc_name(path: str, display_name: Optional[str] = None) -> str:
+    """
+    Tên tài liệu để hiển thị/viện dẫn trong chatbot.
+
+    Ưu tiên tên gốc người dùng tải lên (display_name, còn dấu tiếng Việt); nếu
+    không có thì lấy basename và bỏ tiền tố upload (hist_0_, ref_1_, ...).
+    """
+    if display_name:
+        return display_name
+    return _UPLOAD_PREFIX_RE.sub('', os.path.basename(path))
 
 # Chỉ import các module NHẸ ở cấp cao nhất. Các module nặng phụ thuộc llama_index
 # (vector_db, audit_engine, audit_models) được import LAZY bên trong phương thức,
@@ -124,6 +141,7 @@ class RAGAnalyzer:
         reference_docs: List[str],
         rule_docs: Optional[List[str]] = None,
         history_docs: Optional[List[str]] = None,
+        history_names: Optional[Dict[str, str]] = None,
     ) -> bool:
         """
         Chuyển các file sở cứ thành HTML, embed và dựng Qdrant index in-memory.
@@ -136,6 +154,8 @@ class RAGAnalyzer:
             history_docs: đường dẫn tới các YCKT đã duyệt trước đây (DOCX/HTML), dùng
                           làm kho tra cứu cho chatbot hỏi-đáp. Tùy chọn — nếu rỗng thì
                           chatbot chỉ đối chiếu trên tài liệu đang xét.
+            history_names: map {path: tên gốc} để hiển thị/viện dẫn đúng tên người
+                          dùng tải lên (path đã sanitize làm mất dấu tiếng Việt).
 
         Returns:
             True nếu thành công
@@ -184,9 +204,9 @@ class RAGAnalyzer:
             # Xây hybrid retriever một lần, tái dùng cho mọi chunk (BM25 đắt nếu tạo lại mỗi lần)
             self._retriever = build_hybrid_retriever(self._index, nodes, top_k=6)
 
-            # --- Kho YCKT lịch sử (NGUỒN A cho chatbot) — chẻ theo DÒNG thông số ---
+            # --- Kho YCKT lịch sử (NGUỒN A cho chatbot) — chẻ theo MỤC thiết bị ---
             self._build_history_index(history_docs, build_yckt_index_in_memory,
-                                      build_hybrid_retriever)
+                                      build_hybrid_retriever, history_names)
 
             self.is_initialized = True
             print("[RAG] Dựng index hoàn tất.")
@@ -349,19 +369,21 @@ class RAGAnalyzer:
     # ------------------------------------------------------------------
 
     def _build_history_index(self, history_docs, build_yckt_index_in_memory,
-                             build_hybrid_retriever) -> None:
+                             build_hybrid_retriever, history_names=None) -> None:
         """Dựng index kho YCKT lịch sử (NGUỒN A). Lỗi không chặn pipeline chính."""
         if not history_docs:
             print("[RAG] Không có YCKT lịch sử — chatbot chỉ đối chiếu tài liệu hiện tại.")
             return
 
+        names = history_names or {}
         html_docs: List[Tuple[str, str]] = []
         for path in history_docs:
             if not os.path.exists(path):
                 print(f"[RAG] Bỏ qua YCKT lịch sử (không tồn tại): {path}")
                 continue
             try:
-                html_docs.append((docx_to_html(path), os.path.basename(path)))
+                doc_name = clean_doc_name(path, names.get(path))
+                html_docs.append((docx_to_html(path), doc_name))
             except Exception as e:  # noqa: BLE001
                 print(f"[RAG] Không đọc được YCKT lịch sử '{path}': {e}")
 
