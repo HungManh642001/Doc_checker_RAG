@@ -128,6 +128,8 @@ def upload_and_analyze():
         #   - ruleDocuments: quy định → inject vào prompt thẩm định (KHÔNG index)
         reference_docs = request.files.getlist('referenceDocuments')
         rule_docs = request.files.getlist('ruleDocuments')
+        # historyDocuments: YCKT đã duyệt trước đây → kho tra cứu cho chatbot hỏi-đáp
+        history_docs = request.files.getlist('historyDocuments')
 
         # Create session directory
         session_id = str(uuid.uuid4())
@@ -163,6 +165,18 @@ def upload_and_analyze():
                     rule_paths.append(rule_path)
                     print(f"[API] Saved rule: {rule_filename}")
 
+            # Save history documents (YCKT cũ → kho tra cứu cho chatbot)
+            history_paths = []
+            for hist_doc in history_docs:
+                if hist_doc and hist_doc.filename and allowed_file(hist_doc.filename):
+                    hist_filename = secure_filename(hist_doc.filename)
+                    hist_path = os.path.join(
+                        upload_dir, f'hist_{len(history_paths)}_{hist_filename}'
+                    )
+                    hist_doc.save(hist_path)
+                    history_paths.append(hist_path)
+                    print(f"[API] Saved history YCKT: {hist_filename}")
+
             # --- Lưu các file VỪA UPLOAD thành preset (trước khi trộn preset cũ) ---
             if request.form.get('savePresets', '').lower() == 'true':
                 _save_paths_as_presets(ref_paths, REFERENCE_PRESET_DIR)
@@ -182,7 +196,7 @@ def upload_and_analyze():
             print("[API] Đang dựng index từ sở cứ...")
             analyzer = make_analyzer()
 
-            if not analyzer.initialize_rag_system(ref_paths, rule_paths):
+            if not analyzer.initialize_rag_system(ref_paths, rule_paths, history_paths):
                 return jsonify({
                     'error': 'Failed to initialize RAG system. Check logs for details.'
                 }), 500
@@ -204,6 +218,7 @@ def upload_and_analyze():
                 'main_html': main_html,
                 'ref_paths': ref_paths,
                 'rule_paths': rule_paths,
+                'history_paths': history_paths,
                 'upload_dir': upload_dir,
                 'analyzer': analyzer,
                 'errors': errors,

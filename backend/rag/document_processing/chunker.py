@@ -1,6 +1,6 @@
 import re
 from bs4 import BeautifulSoup, Tag
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # Trích tên "Mục" (đề mục/phân cấp) mà chunker đã inject vào mỗi chunk.
 _RE_MUC = re.compile(r'<!--\s*Mục:\s*(.+?)\s*-->')
@@ -10,6 +10,95 @@ def extract_muc(html_chunk: str) -> str:
     """Lấy tên đề mục từ comment <!-- Mục: ... --> trong chunk (rỗng nếu không có)."""
     m = _RE_MUC.search(html_chunk or '')
     return m.group(1).strip() if m else ''
+
+
+# ---------------------------------------------------------------------------
+# Trích trường có cấu trúc từ một mini-table chunk (dùng cho corpus tra cứu YCKT)
+# ---------------------------------------------------------------------------
+
+def row_chunk_to_fields(html_chunk: str) -> Dict[str, object]:
+    """
+    Trích các trường có cấu trúc từ một mini-table chunk (header + 1 dòng dữ liệu).
+
+    Dùng cho corpus tra cứu chatbot (kho YCKT lịch sử + tài liệu đang xét) — nơi mỗi
+    DÒNG thông số là một đơn vị truy hồi, khác parse_html_to_nodes_smart (gom theo
+    heading, dùng cho sở cứ pháp lý).
+
+    Cấu trúc cột YCKT giả định: TT | Tên yêu cầu | Giá trị yêu cầu | (Tiêu chí | PP...).
+
+    Returns:
+        {
+          "section": <tên đề mục từ comment <!-- Mục: ... -->>,
+          "tt": <cột 1>, "param_name": <cột 2>, "param_value": <cột 3>,
+          "cells": [<toàn bộ cell dữ liệu>],
+        }
+    """
+    section = extract_muc(html_chunk)
+    soup = BeautifulSoup(html_chunk, 'html.parser')
+
+    cells: List[str] = []
+    for row in soup.find_all('tr'):
+        if row.find('th'):
+            continue  # bỏ dòng header
+        tds = row.find_all('td', recursive=False)
+        texts = [c.get_text(separator=' ', strip=True) for c in tds]
+        if any(texts):
+            cells = texts
+            break  # chunk_size=1 → chỉ có 1 dòng dữ liệu thực
+
+    return {
+        'section': section,
+        'tt': cells[0] if len(cells) > 0 else '',
+        'param_name': cells[1] if len(cells) > 1 else '',
+        'param_value': cells[2] if len(cells) > 2 else '',
+        'cells': cells,
+    }
+
+
+def build_yckt_row_payload(html_chunk: str, doc_name: str) -> Optional[Dict[str, object]]:
+    """
+    Dựng payload cho một node YCKT theo dòng (chưa nhúng vector).
+
+    Tách phần logic THUẦN (không phụ thuộc llama_index/embedding) khỏi vector_db để
+    dễ test: vector_db chỉ việc làm sạch `embed_source`, nhúng vector rồi gắn vào node.
+
+    Returns:
+        None nếu dòng không có dữ liệu trích xuất được, ngược lại:
+        {
+          "text_for_llm": <chuỗi LLM đọc & trích dẫn, nêu rõ nguồn tài liệu>,
+          "embed_source": <chuỗi thô để embed (Mục + Tên + Giá trị)>,
+          "metadata": {doc_name, section, tt, param_name, param_value},
+        }
+    """
+    fields = row_chunk_to_fields(html_chunk)
+    cells: List[str] = fields['cells']  # type: ignore[assignment]
+    if not cells:
+        return None
+
+    section = fields['section']
+    cell_text = ' | '.join(c for c in cells if c)
+
+    ctx = f' | Mục: {section}' if section else ''
+    text_for_llm = f'[Tài liệu: {doc_name}{ctx}]\n{cell_text}'
+
+    embed_parts = [
+        p for p in (section, fields['param_name'], fields['param_value']) if p
+    ]
+    embed_source = '. '.join(embed_parts) or cell_text
+    if not embed_source.strip():
+        return None
+
+    return {
+        'text_for_llm': text_for_llm,
+        'embed_source': embed_source,
+        'metadata': {
+            'doc_name': doc_name,
+            'section': section,
+            'tt': fields['tt'],
+            'param_name': fields['param_name'],
+            'param_value': fields['param_value'],
+        },
+    }
 
 
 def chunk_html_table(

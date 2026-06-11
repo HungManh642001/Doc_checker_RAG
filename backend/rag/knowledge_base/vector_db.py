@@ -17,6 +17,7 @@ from llama_index.vector_stores.qdrant import QdrantVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.embeddings.ollama import OllamaEmbedding
 from rag.config import OLLAMA_URL, EMBEDDING_MODEL, EMBEDDING_MODEL_PATH, EMBEDDING_CACHE_FOLDER
+from rag.document_processing.chunker import chunk_html_table, build_yckt_row_payload
 
 # embed_model = HuggingFaceEmbedding(
 #     model_name=EMBEDDING_MODEL_PATH,
@@ -208,6 +209,79 @@ def build_index_in_memory(
 
     if not all_nodes:
         raise ValueError("Không trích xuất được node nào từ sở cứ đã cung cấp.")
+
+    client = qdrant_client.QdrantClient(location=":memory:")
+    vector_store = QdrantVectorStore(client=client, collection_name=collection_name)
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    index = VectorStoreIndex(nodes=all_nodes, storage_context=storage_context)
+    return index, client, all_nodes
+
+
+def yckt_rows_to_nodes(html_content: str, doc_name: str) -> List[TextNode]:
+    """
+    Chẻ một tài liệu YCKT thành các node theo DÒNG thông số (để tra cứu/đối chiếu).
+
+    Logic trích trường/định dạng text nằm ở chunker.build_yckt_row_payload (thuần,
+    test được không cần embedding). Hàm này chỉ làm sạch text, nhúng vector và
+    gắn vào TextNode.
+
+    Mỗi node:
+    - text  (LLM đọc & trích dẫn): "[Tài liệu: X | Mục: ...]\\n<các cell> "
+    - embedding: vector của plain text (Mục + Tên yêu cầu + Giá trị yêu cầu)
+    - metadata: doc_name, section, tt, param_name, param_value
+    """
+    nodes: List[TextNode] = []
+    chunks = chunk_html_table(html_content, chunk_size=1, header_rows_count=2)
+
+    for chunk in chunks:
+        payload = build_yckt_row_payload(chunk, doc_name)
+        if payload is None:
+            continue
+
+        text_for_embed = clean_text_for_embedding(payload["embed_source"])
+        if not text_for_embed:
+            continue
+
+        try:
+            vector = embed_model.get_text_embedding(text_for_embed)
+        except Exception as e:  # noqa: BLE001
+            print(f"[RAG] Lỗi embedding dòng YCKT '{doc_name}': {e}")
+            continue
+        if any(math.isnan(v) for v in vector):
+            continue
+
+        node = TextNode(text=payload["text_for_llm"], metadata=payload["metadata"])
+        node.embedding = vector
+        nodes.append(node)
+
+    print(f"  -> YCKT '{doc_name}': bóc tách & nhúng {len(nodes)} dòng thông số.")
+    return nodes
+
+
+def build_yckt_index_in_memory(
+    html_docs: List[Tuple[str, str]],
+    collection_name: str = "yckt_session",
+) -> Tuple[VectorStoreIndex, qdrant_client.QdrantClient, List]:
+    """
+    Dựng Qdrant index in-memory theo DÒNG thông số cho corpus tra cứu.
+
+    Khác build_index_in_memory (gom theo heading, dùng cho sở cứ pháp lý): hàm này
+    chẻ theo dòng bảng — phù hợp tra cứu/đối chiếu từng thông số YCKT (kho lịch sử
+    và tài liệu đang xét).
+
+    Args:
+        html_docs: list of (html_content, document_name)
+        collection_name: tên collection Qdrant (mỗi client in-memory độc lập)
+
+    Returns:
+        (VectorStoreIndex, QdrantClient, all_nodes) — all_nodes để dựng BM25.
+    """
+    all_nodes: List = []
+    for html_content, doc_name in html_docs:
+        all_nodes.extend(yckt_rows_to_nodes(html_content, doc_name))
+
+    if not all_nodes:
+        raise ValueError("Không trích xuất được dòng thông số nào từ tài liệu YCKT.")
 
     client = qdrant_client.QdrantClient(location=":memory:")
     vector_store = QdrantVectorStore(client=client, collection_name=collection_name)

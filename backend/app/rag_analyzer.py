@@ -100,6 +100,17 @@ class RAGAnalyzer:
         self._mock: bool = MOCK_MODE
         self.is_initialized: bool = False
 
+        # --- Corpus tra cứu cho chatbot hỏi-đáp (dựng theo DÒNG thông số) ---
+        # Kho YCKT lịch sử (upload kèm session) — NGUỒN A khi trả lời.
+        self._history_index = None
+        self._history_client = None
+        self._history_retriever = None
+        # Tài liệu đang xét — NGUỒN B khi trả lời (dựng trong analyze_document).
+        self._current_index = None
+        self._current_client = None
+        self._current_retriever = None
+        self._main_doc_name: str = ""
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -108,6 +119,7 @@ class RAGAnalyzer:
         self,
         reference_docs: List[str],
         rule_docs: Optional[List[str]] = None,
+        history_docs: Optional[List[str]] = None,
     ) -> bool:
         """
         Chuyển các file sở cứ thành HTML, embed và dựng Qdrant index in-memory.
@@ -117,6 +129,9 @@ class RAGAnalyzer:
                             Nếu rỗng → dùng sở cứ mặc định đi kèm hệ thống.
             rule_docs: đường dẫn tới các file quy định (.md/.txt/.docx) người dùng upload.
                        Nếu None/rỗng → dùng quy định mặc định (quy_dinh_chung.md).
+            history_docs: đường dẫn tới các YCKT đã duyệt trước đây (DOCX/HTML), dùng
+                          làm kho tra cứu cho chatbot hỏi-đáp. Tùy chọn — nếu rỗng thì
+                          chatbot chỉ đối chiếu trên tài liệu đang xét.
 
         Returns:
             True nếu thành công
@@ -134,7 +149,8 @@ class RAGAnalyzer:
 
             # Lazy import các module nặng (chỉ khi chạy thật)
             from rag.knowledge_base.vector_db import (
-                build_index_in_memory, build_hybrid_retriever,
+                build_index_in_memory, build_yckt_index_in_memory,
+                build_hybrid_retriever,
             )
 
             # Sở cứ: fallback sang sở cứ mặc định nếu người dùng không upload
@@ -164,6 +180,10 @@ class RAGAnalyzer:
             # Xây hybrid retriever một lần, tái dùng cho mọi chunk (BM25 đắt nếu tạo lại mỗi lần)
             self._retriever = build_hybrid_retriever(self._index, nodes, top_k=6)
 
+            # --- Kho YCKT lịch sử (NGUỒN A cho chatbot) — chẻ theo DÒNG thông số ---
+            self._build_history_index(history_docs, build_yckt_index_in_memory,
+                                      build_hybrid_retriever)
+
             self.is_initialized = True
             print("[RAG] Dựng index hoàn tất.")
             return True
@@ -190,6 +210,8 @@ class RAGAnalyzer:
         if not self._mock and self._index is None:
             raise RuntimeError("Index chưa sẵn sàng.")
 
+        self._main_doc_name = os.path.basename(main_doc_path)
+
         try:
             print("[RAG] Đang chuyển tài liệu sang HTML...")
             html = docx_to_html(main_doc_path)
@@ -207,6 +229,10 @@ class RAGAnalyzer:
 
             # ----- Chế độ thật: gọi LLM theo từng chunk -----
             from rag.audit_logic.audit_engine import run_audit
+
+            # Dựng index tài liệu đang xét (NGUỒN B cho chatbot) — chẻ theo dòng.
+            # Không chặn pipeline thẩm định nếu dựng thất bại.
+            self._build_current_index(html)
 
             limit = min(20, len(chunks))
             print(f"[RAG] {len(chunks)} chunks, xử lý {limit} chunks đầu.")
@@ -240,15 +266,71 @@ class RAGAnalyzer:
 
     def cleanup(self) -> None:
         """Đóng Qdrant client và giải phóng tài nguyên."""
-        if self._client:
-            try:
-                self._client.close()
-            except Exception:
-                pass
-        self._index = None
-        self._client = None
-        self._retriever = None
+        for client in (self._client, self._history_client, self._current_client):
+            if client:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+        self._index = self._client = self._retriever = None
+        self._history_index = self._history_client = self._history_retriever = None
+        self._current_index = self._current_client = self._current_retriever = None
         self.is_initialized = False
+
+    # ------------------------------------------------------------------
+    # Corpus tra cứu cho chatbot (dựng theo dòng thông số)
+    # ------------------------------------------------------------------
+
+    def _build_history_index(self, history_docs, build_yckt_index_in_memory,
+                             build_hybrid_retriever) -> None:
+        """Dựng index kho YCKT lịch sử (NGUỒN A). Lỗi không chặn pipeline chính."""
+        if not history_docs:
+            print("[RAG] Không có YCKT lịch sử — chatbot chỉ đối chiếu tài liệu hiện tại.")
+            return
+
+        html_docs: List[Tuple[str, str]] = []
+        for path in history_docs:
+            if not os.path.exists(path):
+                print(f"[RAG] Bỏ qua YCKT lịch sử (không tồn tại): {path}")
+                continue
+            try:
+                html_docs.append((docx_to_html(path), os.path.basename(path)))
+            except Exception as e:  # noqa: BLE001
+                print(f"[RAG] Không đọc được YCKT lịch sử '{path}': {e}")
+
+        if not html_docs:
+            return
+
+        try:
+            print(f"[RAG] Đang embed kho YCKT lịch sử từ {len(html_docs)} file...")
+            self._history_index, self._history_client, nodes = build_yckt_index_in_memory(
+                html_docs, collection_name="yckt_history"
+            )
+            self._history_retriever = build_hybrid_retriever(
+                self._history_index, nodes, top_k=6
+            )
+            print(f"[RAG] Kho YCKT lịch sử sẵn sàng ({len(nodes)} dòng thông số).")
+        except Exception as e:  # noqa: BLE001
+            print(f"[RAG] Không dựng được kho YCKT lịch sử: {e}")
+            self._history_index = self._history_client = self._history_retriever = None
+
+    def _build_current_index(self, main_html: str) -> None:
+        """Dựng index tài liệu đang xét (NGUỒN B). Lỗi không chặn pipeline chính."""
+        try:
+            from rag.knowledge_base.vector_db import (
+                build_yckt_index_in_memory, build_hybrid_retriever,
+            )
+            doc_name = self._main_doc_name or "Tài liệu đang xét"
+            self._current_index, self._current_client, nodes = build_yckt_index_in_memory(
+                [(main_html, doc_name)], collection_name="current_doc"
+            )
+            self._current_retriever = build_hybrid_retriever(
+                self._current_index, nodes, top_k=6
+            )
+            print(f"[RAG] Index tài liệu hiện tại sẵn sàng ({len(nodes)} dòng).")
+        except Exception as e:  # noqa: BLE001
+            print(f"[RAG] Không dựng được index tài liệu hiện tại: {e}")
+            self._current_index = self._current_client = self._current_retriever = None
 
     # ------------------------------------------------------------------
     # Internal
