@@ -76,3 +76,16 @@ EMBEDDING_CACHE_FOLDER = _get("EMBEDDING_CACHE_FOLDER", r"E:\hf_cache")
 REQUEST_TIMEOUT = float(_get("REQUEST_TIMEOUT", "600.0"))
 CONTEXT_WINDOW = int(_get("CONTEXT_WINDOW", "8192"))   # context window cho Ollama
 NUM_CTX = int(_get("NUM_CTX", "10240"))                # num_ctx cho Ollama
+
+# ---------------------------------------------------------------------------
+# Tham số THẨM ĐỊNH (audit pipeline)
+# ---------------------------------------------------------------------------
+# Số luồng gọi LLM song song khi thẩm định. vLLM trên GPU batch tốt nhiều request
+# đồng thời → tăng throughput. Phần truy hồi (Qdrant) được khóa tuần tự bên trong.
+AUDIT_CONCURRENCY = int(_get("AUDIT_CONCURRENCY", "6"))
+# Số dòng dữ liệu tối đa mỗi chunk khi thẩm định. Chunk gom theo MỤC bảng nhưng
+# không vượt quá trần này (mục dài bị cắt thành nhiều chunk).
+AUDIT_CHUNK_MAX_ROWS = int(_get("AUDIT_CHUNK_MAX_ROWS", "8"))
+# Trần số chunk thẩm định (chống tài liệu quá dài làm treo). Tăng so với giới hạn
+# cứng 20 cũ vì đã song song hóa + gom mục.
+AUDIT_MAX_CHUNKS = int(_get("AUDIT_MAX_CHUNKS", "60"))

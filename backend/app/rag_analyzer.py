@@ -5,6 +5,8 @@ sau đó thẩm định tài liệu đầu vào theo từng chunk.
 """
 
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -13,7 +15,9 @@ from typing import Dict, List, Optional, Tuple
 # để chế độ MOCK_MODE chạy được kể cả khi không có llama_index / không kết nối được.
 from rag.knowledge_base.rules import load_rules_from_files
 from rag.document_processing.chunker import chunk_html_table, extract_muc
-from rag.config import MOCK_MODE
+from rag.config import (
+    MOCK_MODE, AUDIT_CONCURRENCY, AUDIT_CHUNK_MAX_ROWS, AUDIT_MAX_CHUNKS,
+)
 
 # Sở cứ mặc định đi kèm hệ thống (NĐ 86/2012) — dùng khi người dùng không upload sở cứ.
 _DEFAULT_REFERENCE_DIR = (
@@ -217,7 +221,11 @@ class RAGAnalyzer:
             html = docx_to_html(main_doc_path)
 
             print("[RAG] Đang chẻ nhỏ tài liệu...")
-            chunks = chunk_html_table(html, chunk_size=1, header_rows_count=2)
+            # Gom theo MỤC bảng nhưng không vượt quá AUDIT_CHUNK_MAX_ROWS dòng/chunk
+            # → ít lần gọi LLM hơn + có ngữ cảnh cùng mục (chính xác hơn chunk 1-dòng).
+            chunks = chunk_html_table(
+                html, chunk_size=AUDIT_CHUNK_MAX_ROWS, header_rows_count=2
+            )
 
             # ----- MOCK MODE: giả lập bằng heuristic, xử lý TOÀN BỘ chunk -----
             if self._mock:
@@ -234,27 +242,43 @@ class RAGAnalyzer:
             # Không chặn pipeline thẩm định nếu dựng thất bại.
             self._build_current_index(html)
 
-            limit = min(20, len(chunks))
-            print(f"[RAG] {len(chunks)} chunks, xử lý {limit} chunks đầu.")
+            limit = min(AUDIT_MAX_CHUNKS, len(chunks))
+            audit_chunks = chunks[:limit]
+            print(f"[RAG] {len(chunks)} chunks, xử lý {limit} chunks "
+                  f"song song ({AUDIT_CONCURRENCY} luồng).")
 
-            all_errors: List[Dict] = []
-            for idx, chunk in enumerate(chunks[:limit]):
-                try:
-                    print(f"[RAG] Thẩm định chunk {idx + 1}/{limit}...")
-                    ket_qua = run_audit(
-                        self._index, chunk, self._rules, top_k=top_k,
-                        retriever=self._retriever,
-                    )
-                    section = extract_muc(chunk)
-                    for err_idx, error in enumerate(ket_qua.danh_sach_loi):
-                        entry = self._transform_error(error, idx, err_idx, section)
-                        if entry:
-                            all_errors.append(entry)
-                    n = len(ket_qua.danh_sach_loi)
-                    print(f"[RAG]   -> {n} lỗi" if n else "[RAG]   -> Hợp lệ")
-                except Exception as e:
-                    print(f"[RAG] Lỗi chunk {idx + 1}: {e}")
+            # Thẩm định song song: vLLM batch nhiều request → nhanh hơn nhiều so với
+            # gọi tuần tự. Phần truy hồi được khoá tuần tự (Qdrant không thread-safe),
+            # phần sinh LLM (chậm) chạy đồng thời.
+            retrieve_lock = threading.Lock()
 
+            def _audit_one(idx: int, chunk: str):
+                ket_qua = run_audit(
+                    self._index, chunk, self._rules, top_k=top_k,
+                    retriever=self._retriever, retrieve_lock=retrieve_lock,
+                )
+                return ket_qua
+
+            ordered: List = [None] * len(audit_chunks)
+            max_workers = max(1, min(AUDIT_CONCURRENCY, len(audit_chunks)))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_idx = {
+                    executor.submit(_audit_one, idx, chunk): idx
+                    for idx, chunk in enumerate(audit_chunks)
+                }
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        ket_qua = future.result()
+                        ordered[idx] = (audit_chunks[idx], ket_qua)
+                        n = len(ket_qua.danh_sach_loi)
+                        print(f"[RAG]   chunk {idx + 1}/{limit} -> "
+                              + (f"{n} lỗi" if n else "Hợp lệ"))
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[RAG] Lỗi chunk {idx + 1}: {e}")
+                        ordered[idx] = (audit_chunks[idx], None)
+
+            all_errors = self._assemble_errors(ordered)
             print(f"[RAG] Hoàn tất: {len(all_errors)} lỗi.")
             return all_errors
 
@@ -376,6 +400,32 @@ class RAGAnalyzer:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def _assemble_errors(self, ordered: List) -> List[Dict]:
+        """
+        Gom kết quả các chunk (đã sắp theo thứ tự chunk) thành danh sách lỗi.
+
+        Tách riêng khỏi vòng song song để giữ thứ tự xác định (id/section ổn định,
+        frontend/highlight không phụ thuộc thứ tự hoàn thành của luồng) và để test
+        được mà không cần gọi LLM.
+
+        Args:
+            ordered: list các phần tử (chunk_html, ket_qua | None) theo đúng thứ tự
+                     chunk. Phần tử None hoặc ket_qua None bị bỏ qua (chunk lỗi).
+        """
+        all_errors: List[Dict] = []
+        for idx, item in enumerate(ordered):
+            if not item:
+                continue
+            chunk, ket_qua = item
+            if ket_qua is None:
+                continue
+            section = extract_muc(chunk)
+            for err_idx, error in enumerate(ket_qua.danh_sach_loi):
+                entry = self._transform_error(error, idx, err_idx, section)
+                if entry:
+                    all_errors.append(entry)
+        return all_errors
 
     def _transform_error(
         self, error, chunk_idx: int, err_idx: int = 0, section: str = ""
