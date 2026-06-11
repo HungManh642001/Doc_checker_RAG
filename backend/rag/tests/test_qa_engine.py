@@ -111,6 +111,33 @@ def test_build_messages_structure():
     print("[OK] test_build_messages_structure")
 
 
+def test_build_messages_exclude_current():
+    """include_current=False: NGUỒN B bị loại khỏi prompt, có ghi chú chỉ tra YCKT cũ."""
+    msgs = qa_engine.build_messages(
+        question="Cung cấp thông tin Van xả áp?",
+        ctx_a="[NGUỒN A — YCKT trước đây]\n1. Van xả áp ...",
+        ctx_b="[NGUỒN B — Tài liệu đang xét]\n1. KHÔNG ĐƯỢC LỘ ...",
+        include_current=False,
+    )
+    last = msgs[-1].content
+    assert "NGUỒN A" in last
+    assert "KHÔNG ĐƯỢC LỘ" not in last          # nội dung NGUỒN B không lọt vào
+    assert "KHÔNG dùng tài liệu đang thẩm định" in last
+    print("[OK] test_build_messages_exclude_current")
+
+
+def test_build_messages_include_current_default():
+    """Mặc định include_current=True: cả NGUỒN A và B đều có trong prompt."""
+    msgs = qa_engine.build_messages(
+        question="x?",
+        ctx_a="[NGUỒN A]\nA-data",
+        ctx_b="[NGUỒN B]\nB-data",
+    )
+    last = msgs[-1].content
+    assert "A-data" in last and "B-data" in last
+    print("[OK] test_build_messages_include_current_default")
+
+
 def test_safe_retrieve_none_and_error():
     # None retriever → []
     assert qa_engine._safe_retrieve(None, "q") == []
@@ -135,5 +162,7 @@ if __name__ == "__main__":
     test_build_citations_dedup_and_fields()
     test_build_citations_same_param_diff_source_kept()
     test_build_messages_structure()
+    test_build_messages_exclude_current()
+    test_build_messages_include_current_default()
     test_safe_retrieve_none_and_error()
     print("\nTất cả test bước 2 PASSED.")

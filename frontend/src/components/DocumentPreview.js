@@ -143,6 +143,7 @@ function DocumentPreview({ sessionId, errors }) {
         `cầu kỹ thuật trước đây. Nêu rõ tài liệu YCKT nào cung cấp thông tin đó; nếu ` +
         `nhiều tài liệu cùng có, ghi rõ thông tin nào tương ứng với tài liệu nào.`,
       focusParam: subject,
+      includeCurrent: false, // chỉ lấy thông tin từ YCKT trước đây để đối chiếu
     });
   };
 

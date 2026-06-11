@@ -27,6 +27,9 @@ function ChatPanel({ sessionId, prefill, onConsumePrefill }) {
   const [messages, setMessages] = useState([]); // {role, content, citations?, error?}
   const [input, setInput] = useState('');
   const [focusParam, setFocusParam] = useState(null);
+  // Mặc định CHỈ tra cứu YCKT trước đây (không lấy tài liệu đang thẩm định) — để
+  // làm cơ sở đối chiếu. Người dùng có thể bật để gồm cả tài liệu đang xét.
+  const [includeCurrent, setIncludeCurrent] = useState(false);
   const [sending, setSending] = useState(false);
   const listRef = useRef(null);
   const inputRef = useRef(null);
@@ -42,6 +45,9 @@ function ChatPanel({ sessionId, prefill, onConsumePrefill }) {
     setOpen(true);
     if (prefill.question) setInput(prefill.question);
     if (prefill.focusParam) setFocusParam(prefill.focusParam);
+    if (typeof prefill.includeCurrent === 'boolean') {
+      setIncludeCurrent(prefill.includeCurrent);
+    }
     if (inputRef.current) inputRef.current.focus();
     onConsumePrefill?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -64,7 +70,12 @@ function ChatPanel({ sessionId, prefill, onConsumePrefill }) {
       const res = await fetch(`/api/session/${sessionId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: q, history, focusParam: currentFocus }),
+        body: JSON.stringify({
+          question: q,
+          history,
+          focusParam: currentFocus,
+          includeCurrent,
+        }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -87,7 +98,7 @@ function ChatPanel({ sessionId, prefill, onConsumePrefill }) {
       setSending(false);
       setFocusParam(null); // focus chỉ áp dụng cho 1 câu hỏi
     }
-  }, [input, sending, messages, focusParam, sessionId]);
+  }, [input, sending, messages, focusParam, includeCurrent, sessionId]);
 
   const onKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -176,6 +187,16 @@ function ChatPanel({ sessionId, prefill, onConsumePrefill }) {
           </button>
         </div>
       )}
+
+      <label className="chat-scope" title="Mặc định chỉ tra cứu các YCKT trước đây để đối chiếu">
+        <input
+          type="checkbox"
+          checked={includeCurrent}
+          onChange={(e) => setIncludeCurrent(e.target.checked)}
+        />
+        Gồm cả tài liệu đang thẩm định
+        {!includeCurrent && <span className="chat-scope-note"> (đang chỉ tra YCKT trước đây)</span>}
+      </label>
 
       <div className="chat-input-row">
         <textarea

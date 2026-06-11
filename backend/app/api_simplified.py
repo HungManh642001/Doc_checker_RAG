@@ -390,7 +390,8 @@ def chat(session_id):
     {
         "question": "Áp suất van xả áp đã từng dùng giá trị nào?",
         "history": [{"role": "user"|"assistant", "content": "..."}],  // tuỳ chọn
-        "focusParam": "Áp suất hoạt động 0,3 đến 0,95 MPa"            // tuỳ chọn
+        "focusParam": "Van xả áp",                                    // tuỳ chọn
+        "includeCurrent": false   // tuỳ chọn; false = chỉ tra cứu YCKT trước đây
     }
 
     Response:
@@ -412,6 +413,8 @@ def chat(session_id):
 
     history = data.get('history') or []
     focus_param = data.get('focusParam')
+    # includeCurrent=False → chỉ tra cứu YCKT trước đây (không lấy tài liệu đang xét)
+    include_current = bool(data.get('includeCurrent', True))
 
     analyzer = _sessions[session_id].get('analyzer')
     if analyzer is None:
@@ -419,7 +422,8 @@ def chat(session_id):
 
     try:
         result = analyzer.answer_question(
-            question, history=history, focus_param=focus_param
+            question, history=history, focus_param=focus_param,
+            include_current=include_current,
         )
         return jsonify({'success': True, **result}), 200
     except Exception as e:

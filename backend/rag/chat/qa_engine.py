@@ -145,12 +145,16 @@ def build_messages(
     ctx_b: str,
     history: Optional[List[Dict]] = None,
     focus_param: Optional[str] = None,
+    include_current: bool = True,
 ) -> List[ChatMessage]:
     """
     Dựng danh sách ChatMessage: system + lịch sử hội thoại + câu hỏi kèm context.
 
     history: list of {"role": "user"|"assistant", "content": str}.
-    focus_param: thông số người dùng đang quan tâm (vd bấm 'Hỏi về thông số này').
+    focus_param: thông số/thiết bị người dùng đang quan tâm.
+    include_current: nếu False, KHÔNG đưa NGUỒN B (tài liệu đang thẩm định) vào
+                     context — chỉ tra cứu các YCKT trước đây (NGUỒN A) làm cơ sở
+                     đối chiếu.
     """
     messages: List[ChatMessage] = [
         ChatMessage(role=MessageRole.SYSTEM, content=SYSTEM_PROMPT)
@@ -170,9 +174,17 @@ def build_messages(
         f"\nĐối tượng đang quan tâm (thiết bị/vật liệu hoặc thông số): {focus_param}"
         if focus_param else ""
     )
+    if include_current:
+        sources_block = f"{ctx_a}\n\n{ctx_b}\n\n"
+    else:
+        sources_block = (
+            f"{ctx_a}\n\n"
+            "(CHỈ tra cứu các YCKT TRƯỚC ĐÂY — KHÔNG dùng tài liệu đang thẩm định. "
+            "Chỉ nêu thông tin từ các tài liệu trước đây để làm cơ sở đối chiếu.)\n\n"
+        )
+
     user_content = (
-        f"{ctx_a}\n\n"
-        f"{ctx_b}\n\n"
+        f"{sources_block}"
         f"--------------------\n"
         f"CÂU HỎI: {question}{focus}"
     )
@@ -201,10 +213,16 @@ def answer_question(
     current_retriever=None,
     history: Optional[List[Dict]] = None,
     focus_param: Optional[str] = None,
+    include_current: bool = True,
     top_k: int = 6,
 ) -> Dict:
     """
-    Trả lời một câu hỏi của người thẩm định bằng RAG trên 2 nguồn.
+    Trả lời một câu hỏi của người thẩm định bằng RAG.
+
+    include_current: nếu False, CHỈ tra cứu kho YCKT trước đây (NGUỒN A) — không lấy
+                     thông tin từ tài liệu đang thẩm định (NGUỒN B). Dùng khi người
+                     dùng muốn xem thông tin thiết bị từ tài liệu cũ làm cơ sở đối
+                     chiếu, không muốn lẫn nội dung tài liệu đang xét.
 
     Returns:
         {"answer": <chuỗi trả lời>, "citations": [<trích dẫn>...]}
@@ -212,11 +230,13 @@ def answer_question(
     query = f"{question} {focus_param}".strip() if focus_param else question
 
     nodes_a = _safe_retrieve(history_retriever, query)
-    nodes_b = _safe_retrieve(current_retriever, query)
+    nodes_b = _safe_retrieve(current_retriever, query) if include_current else []
 
     ctx_a = format_context(nodes_a, "NGUỒN A — YCKT trước đây")
     ctx_b = format_context(nodes_b, "NGUỒN B — Tài liệu đang xét")
-    messages = build_messages(question, ctx_a, ctx_b, history, focus_param)
+    messages = build_messages(
+        question, ctx_a, ctx_b, history, focus_param, include_current=include_current
+    )
 
     # Import lazy: side-effect cấu hình Settings.llm (theo LLM_PROVIDER).
     from llama_index.core import Settings

@@ -293,6 +293,7 @@ class RAGAnalyzer:
         question: str,
         history: Optional[List[Dict]] = None,
         focus_param: Optional[str] = None,
+        include_current: bool = True,
         top_k: int = 6,
     ) -> Dict:
         """
@@ -326,6 +327,7 @@ class RAGAnalyzer:
             current_retriever=self._current_retriever,
             history=history,
             focus_param=focus_param,
+            include_current=include_current,
             top_k=top_k,
         )
 

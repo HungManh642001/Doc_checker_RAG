@@ -222,6 +222,20 @@
   font-size: 12px;
 }
 
+.chat-scope {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #475569;
+  padding: 6px 12px 0;
+}
+
+.chat-scope-note {
+  color: #2563eb;
+  font-weight: 600;
+}
+
 .chat-input-row {
   display: flex;
   gap: 8px;
