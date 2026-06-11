@@ -23,6 +23,7 @@ function DocumentPreview({ sessionId, errors }) {
   const [editValue, setEditValue] = useState('');
   const [accepted, setAccepted] = useState({}); // errorId -> fixedValue
   const [downloading, setDownloading] = useState(false);
+  const [chatPrefill, setChatPrefill] = useState(null); // {question, focusParam}
   const containerRef = useRef(null);
 
   // Tải HTML tài liệu
@@ -127,6 +128,20 @@ function DocumentPreview({ sessionId, errors }) {
     setEditValue(selected.suggestion || '');
   };
 
+  // Mở chatbot và điền sẵn câu hỏi về thông số đang chọn (NGUỒN A: YCKT cũ).
+  const askAboutSelected = () => {
+    if (!selected) return;
+    const param = (selected.original_text || '').trim();
+    const sec = (selected.section || '').trim();
+    const where = sec ? ` (mục "${sec}")` : '';
+    setChatPrefill({
+      question:
+        `Thông số "${param}"${where} đã từng xuất hiện trong các YCKT trước đây ` +
+        `chưa? Nếu có thì giá trị là bao nhiêu, có tham khảo được cho tài liệu này không?`,
+      focusParam: sec ? `${param} — ${sec}` : param,
+    });
+  };
+
   const acceptedCount = Object.keys(accepted).length;
 
   const downloadCorrected = async () => {
@@ -212,6 +227,13 @@ function DocumentPreview({ sessionId, errors }) {
             <div className="dp-section">
               <strong>📌 Nội dung gốc</strong>
               <code>{selected.original_text}</code>
+              <button
+                className="dp-ask-btn"
+                onClick={askAboutSelected}
+                title="Hỏi chatbot xem thông số này đã từng dùng trong YCKT trước đây chưa"
+              >
+                💬 Hỏi về thông số này
+              </button>
             </div>
             <div className="dp-section">
               <strong>🔴 Lỗi phát hiện</strong>
@@ -265,11 +287,19 @@ function DocumentPreview({ sessionId, errors }) {
               {matchedCount() < errors.length &&
                 ' (Một số lỗi nằm trong nội dung không khớp chính xác nên không tô được.)'}
             </p>
+            <p className="dp-hint">
+              💬 Cần đối chiếu với YCKT trước đây? Mở <strong>Hỏi đáp</strong> ở góc phải
+              dưới, hoặc bấm “Hỏi về thông số này” khi xem chi tiết một lỗi.
+            </p>
           </div>
         )}
       </div>
 
-      <ChatPanel sessionId={sessionId} />
+      <ChatPanel
+        sessionId={sessionId}
+        prefill={chatPrefill}
+        onConsumePrefill={() => setChatPrefill(null)}
+      />
     </div>
   );
 }
