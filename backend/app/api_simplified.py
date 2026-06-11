@@ -476,7 +476,14 @@ def export_report_excel(session_id):
 
 
 def _build_excel_report(errors: list, doc_name: str) -> bytes:
-    """Dựng workbook báo cáo lỗi (mỗi loại lỗi con là một dòng) → trả về bytes."""
+    """
+    Dựng workbook báo cáo lỗi → bytes.
+
+    Các lỗi được NHÓM theo "Mục" (đề mục/vị trí trong tài liệu thẩm định); mỗi nhóm
+    có một dòng tiêu đề để người đọc dễ theo dõi lỗi nằm ở phần nào của tài liệu.
+    Mỗi loại lỗi con là một dòng.
+    """
+    from collections import OrderedDict
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
@@ -489,17 +496,21 @@ def _build_excel_report(errors: list, doc_name: str) -> bytes:
         'Đề xuất sửa', 'Vị trí sở cứ', 'Trích dẫn sở cứ',
     ]
     widths = [6, 40, 22, 50, 35, 24, 40]
+    ncol = len(headers)
 
     # Tiêu đề tài liệu
     ws.append([f'BÁO CÁO THẨM ĐỊNH: {doc_name}'])
     ws.append([f'Tổng số mục lỗi: {len(errors)}'])
     ws.append([])
+    ws.cell(row=1, column=1).font = Font(bold=True, size=14)
 
     header_row_idx = ws.max_row + 1
     ws.append(headers)
 
     header_fill = PatternFill('solid', fgColor='4472C4')
     header_font = Font(bold=True, color='FFFFFF')
+    section_fill = PatternFill('solid', fgColor='D9E1F2')
+    section_font = Font(bold=True, color='1F3864', size=12)
     thin = Side(style='thin', color='BFBFBF')
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
@@ -511,26 +522,44 @@ def _build_excel_report(errors: list, doc_name: str) -> bytes:
         c.alignment = Alignment(horizontal='center', vertical='center')
         c.border = border
 
-    stt = 0
+    # Nhóm lỗi theo "Mục" (giữ thứ tự xuất hiện trong tài liệu)
+    groups = OrderedDict()
     for err in errors:
-        sub_errors = err.get('danh_sach_cac_loi') or [{}]
-        for sub in sub_errors:
-            stt += 1
-            row = [
-                stt,
-                err.get('original_text', ''),
-                sub.get('error_type', ''),
-                sub.get('reasoning', ''),
-                err.get('suggestion', ''),
-                err.get('reference_location', ''),
-                err.get('reference_quote', ''),
-            ]
-            ws.append(row)
-            r = ws.max_row
-            for col_idx in range(1, len(headers) + 1):
-                cell = ws.cell(row=r, column=col_idx)
-                cell.alignment = Alignment(wrap_text=True, vertical='top')
-                cell.border = border
+        sec = (err.get('section') or '').strip() or '(Không xác định mục)'
+        groups.setdefault(sec, []).append(err)
+
+    stt = 0
+    for section, errs in groups.items():
+        # Dòng tiêu đề đề mục (gộp ô toàn bộ chiều ngang)
+        sec_row = ws.max_row + 1
+        ws.cell(row=sec_row, column=1, value=f'📂 Mục: {section}')
+        ws.merge_cells(start_row=sec_row, start_column=1, end_row=sec_row, end_column=ncol)
+        for col_idx in range(1, ncol + 1):
+            c = ws.cell(row=sec_row, column=col_idx)
+            c.fill = section_fill
+            c.font = section_font
+            c.border = border
+        ws.cell(row=sec_row, column=1).alignment = Alignment(
+            horizontal='left', vertical='center'
+        )
+
+        for err in errs:
+            for sub in (err.get('danh_sach_cac_loi') or [{}]):
+                stt += 1
+                ws.append([
+                    stt,
+                    err.get('original_text', ''),
+                    sub.get('error_type', ''),
+                    sub.get('reasoning', ''),
+                    err.get('suggestion', ''),
+                    err.get('reference_location', ''),
+                    err.get('reference_quote', ''),
+                ])
+                r = ws.max_row
+                for col_idx in range(1, ncol + 1):
+                    cell = ws.cell(row=r, column=col_idx)
+                    cell.alignment = Alignment(wrap_text=True, vertical='top')
+                    cell.border = border
 
     buf = io.BytesIO()
     wb.save(buf)

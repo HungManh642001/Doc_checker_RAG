@@ -1,5 +1,15 @@
+import re
 from bs4 import BeautifulSoup, Tag
 from typing import List, Tuple
+
+# Trích tên "Mục" (đề mục/phân cấp) mà chunker đã inject vào mỗi chunk.
+_RE_MUC = re.compile(r'<!--\s*Mục:\s*(.+?)\s*-->')
+
+
+def extract_muc(html_chunk: str) -> str:
+    """Lấy tên đề mục từ comment <!-- Mục: ... --> trong chunk (rỗng nếu không có)."""
+    m = _RE_MUC.search(html_chunk or '')
+    return m.group(1).strip() if m else ''
 
 
 def chunk_html_table(

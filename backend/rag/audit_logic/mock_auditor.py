@@ -18,6 +18,8 @@ from typing import Dict, List
 
 from bs4 import BeautifulSoup
 
+from rag.document_processing.chunker import extract_muc
+
 # Ký hiệu đơn vị đo thường gặp (đặt ký hiệu DÀI trước để regex ưu tiên khớp dài).
 _UNITS = [
     "MPa", "Mpa", "kPa", "hPa", "Pa",
@@ -77,11 +79,13 @@ def _make_error(
     reasoning: str,
     suggestion: str,
     reference_quote: str,
+    section: str = "",
 ) -> Dict:
     """Dựng error dict đúng định dạng frontend mong đợi (giống _transform_error)."""
     return {
         "id": f"error_c{chunk_idx}_{err_idx}",
         "original_text": original_text,
+        "section": section,
         "elementId": f"chunk_{chunk_idx}",
         "elementType": "chunk",
         "danh_sach_cac_loi": [
@@ -103,6 +107,7 @@ def audit_chunk(html_chunk: str, rules: str, chunk_idx: int) -> List[Dict]:
     """
     errors: List[Dict] = []
     seen = set()  # (original_text, error_type) — tránh trùng trong cùng chunk
+    section = extract_muc(html_chunk)  # đề mục/vị trí trong tài liệu
 
     def add(original, etype, reasoning, suggestion, quote):
         key = (original, etype)
@@ -110,7 +115,8 @@ def audit_chunk(html_chunk: str, rules: str, chunk_idx: int) -> List[Dict]:
             return
         seen.add(key)
         errors.append(
-            _make_error(chunk_idx, len(errors), original, etype, reasoning, suggestion, quote)
+            _make_error(chunk_idx, len(errors), original, etype, reasoning,
+                        suggestion, quote, section)
         )
 
     for text in _chunk_texts(html_chunk):

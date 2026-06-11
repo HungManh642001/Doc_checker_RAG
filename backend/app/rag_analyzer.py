@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 # (vector_db, audit_engine, audit_models) được import LAZY bên trong phương thức,
 # để chế độ MOCK_MODE chạy được kể cả khi không có llama_index / không kết nối được.
 from rag.knowledge_base.rules import load_rules_from_files
-from rag.document_processing.chunker import chunk_html_table
+from rag.document_processing.chunker import chunk_html_table, extract_muc
 from rag.config import MOCK_MODE
 
 # Sở cứ mặc định đi kèm hệ thống (NĐ 86/2012) — dùng khi người dùng không upload sở cứ.
@@ -219,8 +219,9 @@ class RAGAnalyzer:
                         self._index, chunk, self._rules, top_k=top_k,
                         retriever=self._retriever,
                     )
+                    section = extract_muc(chunk)
                     for err_idx, error in enumerate(ket_qua.danh_sach_loi):
-                        entry = self._transform_error(error, idx, err_idx)
+                        entry = self._transform_error(error, idx, err_idx, section)
                         if entry:
                             all_errors.append(entry)
                     n = len(ket_qua.danh_sach_loi)
@@ -254,7 +255,7 @@ class RAGAnalyzer:
     # ------------------------------------------------------------------
 
     def _transform_error(
-        self, error, chunk_idx: int, err_idx: int = 0
+        self, error, chunk_idx: int, err_idx: int = 0, section: str = ""
     ) -> Optional[Dict]:
         try:
             details = [
@@ -270,6 +271,7 @@ class RAGAnalyzer:
                 # Giữ NGUYÊN VĂN original_text để apply_text_corrections khớp chính xác
                 # khi thay thế trong DOCX (cắt ngắn sẽ làm hỏng phép thay thế).
                 "original_text": error.original_text,
+                "section": section,
                 "elementId": f"chunk_{chunk_idx}",
                 "elementType": "chunk",
                 "danh_sach_cac_loi": details,
