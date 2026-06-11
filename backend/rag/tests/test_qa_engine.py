@@ -107,7 +107,7 @@ def test_build_messages_structure():
     last = msgs[-1].content
     assert "CÂU HỎI: Áp suất đã dùng giá trị nào?" in last
     assert "[NGUỒN A]" in last and "[NGUỒN B]" in last
-    assert "Thông số đang quan tâm: Áp suất hoạt động" in last
+    assert "Áp suất hoạt động" in last  # focus_param xuất hiện trong message cuối
     print("[OK] test_build_messages_structure")
 
 

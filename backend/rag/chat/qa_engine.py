@@ -53,7 +53,10 @@ SYSTEM_PROMPT = (
     "3. Nếu NGUỒN A không có thiết bị/thông số liên quan, nói rõ: 'Chưa tìm thấy "
     "trong các YCKT trước đây.'\n"
     "4. Luôn viện dẫn TÊN TÀI LIỆU và MỤC (thiết bị) khi dẫn số liệu.\n"
-    "5. Trả lời ngắn gọn, có cấu trúc, bằng tiếng Việt.\n"
+    "5. Nếu NHIỀU tài liệu YCKT trước đây cùng chứa thiết bị/thông tin được hỏi, "
+    "phải trình bày RIÊNG theo từng tài liệu (vd liệt kê theo từng tài liệu) và ghi "
+    "rõ thông tin nào thuộc tài liệu nào — KHÔNG gộp chung làm một.\n"
+    "6. Trả lời ngắn gọn, có cấu trúc, bằng tiếng Việt.\n"
 )
 
 
@@ -163,7 +166,10 @@ def build_messages(
             content=content,
         ))
 
-    focus = f"\nThông số đang quan tâm: {focus_param}" if focus_param else ""
+    focus = (
+        f"\nĐối tượng đang quan tâm (thiết bị/vật liệu hoặc thông số): {focus_param}"
+        if focus_param else ""
+    )
     user_content = (
         f"{ctx_a}\n\n"
         f"{ctx_b}\n\n"
