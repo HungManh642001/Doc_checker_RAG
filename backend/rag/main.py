@@ -48,4 +48,4 @@ if __name__ == "__main__":
         print(ket_qua_tong_hop.model_dump_json(indent=2))
 
     except FileNotFoundError:
-        print(f"Vui lòng đặt file tài liệu cần thẩm định vào đường dẫn: {file_tai_lieu_dau_vao}")
+        print(f"Vui lòng đặt file tài liệu cần thẩm định vào đường dẫn: {input_file}")
