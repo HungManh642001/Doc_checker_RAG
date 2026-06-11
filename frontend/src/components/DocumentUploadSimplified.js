@@ -14,6 +14,8 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
   const [mainDocument, setMainDocument] = React.useState(null);
   const [referenceDocuments, setReferenceDocuments] = React.useState([]);
   const [ruleDocuments, setRuleDocuments] = React.useState([]);
+  // YCKT đã duyệt trước đây → kho tra cứu cho chatbot hỏi-đáp
+  const [historyDocuments, setHistoryDocuments] = React.useState([]);
   const [defaultRules, setDefaultRules] = React.useState(null);
   const [showDefaultRules, setShowDefaultRules] = React.useState(false);
   // Thư viện preset lưu sẵn + lựa chọn của người dùng
@@ -24,6 +26,7 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
   const fileInputMain = React.useRef(null);
   const fileInputRef = React.useRef(null);
   const fileInputRule = React.useRef(null);
+  const fileInputHistory = React.useRef(null);
 
   const loadPresets = React.useCallback(async () => {
     try {
@@ -109,11 +112,18 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
     setRuleDocuments(prev => [...prev, ...files]);
   };
 
+  const handleHistoryDocumentsChange = (e) => {
+    const files = Array.from(e.target.files || []);
+    setHistoryDocuments(prev => [...prev, ...files]);
+  };
+
   const removeFile = (index, type) => {
     if (type === 'reference') {
       setReferenceDocuments(prev => prev.filter((_, i) => i !== index));
     } else if (type === 'rule') {
       setRuleDocuments(prev => prev.filter((_, i) => i !== index));
+    } else if (type === 'history') {
+      setHistoryDocuments(prev => prev.filter((_, i) => i !== index));
     }
   };
 
@@ -149,6 +159,11 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
     // Add rule documents
     ruleDocuments.forEach(doc => {
       formData.append('ruleDocuments', doc);
+    });
+
+    // Add history documents (YCKT cũ → kho tra cứu cho chatbot)
+    historyDocuments.forEach(doc => {
+      formData.append('historyDocuments', doc);
     });
 
     // Add selected presets (tái dùng từ thư viện)
@@ -397,6 +412,54 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
                     </span>
                   )}
                 </label>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* History Documents (YCKT cũ → chatbot hỏi-đáp) */}
+        <div className="upload-section">
+          <h2 className="section-title">
+            🗂️ YCKT Tham Khảo Trước Đây <span className="optional">(Tùy chọn)</span>
+          </h2>
+          <p className="section-hint">
+            Các tài liệu YCKT đã duyệt trước đây. Dùng làm kho tra cứu cho chatbot hỏi-đáp
+            (xem một thông số đã từng dùng giá trị nào, có tham khảo được không). Không
+            ảnh hưởng tới kết quả thẩm định lỗi.
+          </p>
+
+          <div
+            className="upload-box"
+            onClick={() => fileInputHistory.current?.click()}
+          >
+            <span className="upload-icon">🗂️</span>
+            <p className="upload-text">Thêm YCKT tham khảo</p>
+            <p className="upload-format">Chọn nhiều file DOCX/HTML</p>
+          </div>
+          <input
+            ref={fileInputHistory}
+            type="file"
+            multiple
+            accept=".docx,.doc,.html"
+            onChange={handleHistoryDocumentsChange}
+            style={{ display: 'none' }}
+          />
+
+          {historyDocuments.length > 0 && (
+            <div className="file-list">
+              <p className="file-list-title">YCKT tham khảo ({historyDocuments.length}):</p>
+              {historyDocuments.map((file, idx) => (
+                <div key={idx} className="file-item reference-item">
+                  <span className="file-info-small">
+                    🗂️ {file.name} ({(file.size / 1024).toFixed(1)} KB)
+                  </span>
+                  <button
+                    className="remove-btn"
+                    onClick={() => removeFile(idx, 'history')}
+                  >
+                    ✕
+                  </button>
+                </div>
               ))}
             </div>
           )}

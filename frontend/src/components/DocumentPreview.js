@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 import './DocumentPreview.css';
 import { fetchAndSave } from '../utils/download';
+import ChatPanel from './ChatPanel';
 
 const DOCX_MIME =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -267,6 +268,8 @@ function DocumentPreview({ sessionId, errors }) {
           </div>
         )}
       </div>
+
+      <ChatPanel sessionId={sessionId} />
     </div>
   );
 }
