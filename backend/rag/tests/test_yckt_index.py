@@ -17,6 +17,7 @@ from rag.document_processing.chunker import (
     build_yckt_overview_payload,
     chunk_html_table,
     extract_muc,
+    _section_depth,
 )
 
 # Bảng nhiều cột (mô phỏng bảng so sánh NSX): thông tin quan trọng nằm ở cột sau
@@ -125,19 +126,35 @@ def test_build_yckt_row_payload_no_section():
 def test_section_grouping_one_chunk_per_section():
     """chunk_html_table(chunk_size lớn) gom cả mục 'Van xả áp' vào 1 chunk."""
     chunks = chunk_html_table(SECTION_TABLE, chunk_size=40, header_rows_count=2)
-    van = [c for c in chunks if extract_muc(c) == "1.1 Van xả áp"]
+    van = [c for c in chunks if "Van xả áp" in extract_muc(c)]
     assert len(van) == 1, f"Kỳ vọng 1 chunk cho mục Van xả áp, được {len(van)}"
     print("[OK] test_section_grouping_one_chunk_per_section")
+
+
+def test_section_hierarchy_path_preserved():
+    """
+    Đường dẫn phân cấp cha→con phải được giữ: chunk của 'Van xả áp' vẫn chứa tên
+    mục CHA 'Bộ công cụ dụng cụ' → hỏi nhóm cha vẫn truy hồi được mục con.
+    """
+    chunks = chunk_html_table(SECTION_TABLE, chunk_size=40, header_rows_count=2)
+    van_chunk = next(c for c in chunks if "Van xả áp" in extract_muc(c))
+    muc = extract_muc(van_chunk)
+    assert "Bộ công cụ dụng cụ" in muc, f"Mất tên mục cha trong path: {muc!r}"
+    assert "Van xả áp" in muc
+    assert ">" in muc  # có dạng đường dẫn cha > con
+    print("[OK] test_section_hierarchy_path_preserved")
 
 
 def test_build_yckt_section_payload_full_section():
     """Payload theo mục phải gom ĐỦ 4 dòng thông số của 'Van xả áp'."""
     chunks = chunk_html_table(SECTION_TABLE, chunk_size=40, header_rows_count=2)
-    van_chunk = next(c for c in chunks if extract_muc(c) == "1.1 Van xả áp")
+    van_chunk = next(c for c in chunks if "Van xả áp" in extract_muc(c))
 
     payload = build_yckt_section_payload(van_chunk, "YCKT_2024.docx")
     assert payload is not None
-    assert payload["metadata"]["section"] == "1.1 Van xả áp"
+    # section giờ là đường dẫn cha→con, chứa cả tên nhóm cha
+    assert "Bộ công cụ dụng cụ" in payload["metadata"]["section"]
+    assert "Van xả áp" in payload["metadata"]["section"]
     assert payload["metadata"]["row_count"] == 4, payload["metadata"]["row_count"]
 
     text = payload["text_for_llm"]
@@ -193,6 +210,14 @@ def test_build_yckt_overview_payload_empty():
     print("[OK] test_build_yckt_overview_payload_empty")
 
 
+def test_section_depth():
+    assert _section_depth("1 Bộ công cụ dụng cụ") == 1
+    assert _section_depth("1.1 Van xả áp") == 2
+    assert _section_depth("1.1.3 Áp suất") == 3
+    assert _section_depth("Không có số") == 1  # mặc định cấp 1
+    print("[OK] test_section_depth")
+
+
 if __name__ == "__main__":
     test_row_chunk_to_fields()
     test_row_chunk_to_fields_no_data()
@@ -200,9 +225,11 @@ if __name__ == "__main__":
     test_build_yckt_row_payload_empty()
     test_build_yckt_row_payload_no_section()
     test_section_grouping_one_chunk_per_section()
+    test_section_hierarchy_path_preserved()
     test_build_yckt_section_payload_full_section()
     test_build_yckt_section_payload_empty()
     test_section_payload_embeds_all_columns_and_headers()
     test_build_yckt_overview_payload()
     test_build_yckt_overview_payload_empty()
+    test_section_depth()
     print("\nTất cả test bước 1+ PASSED.")

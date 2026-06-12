@@ -26,9 +26,9 @@
   right: 24px;
   bottom: 24px;
   z-index: 1000;
-  width: 380px;
+  width: 440px;
   max-width: calc(100vw - 32px);
-  height: 540px;
+  height: 600px;
   max-height: calc(100vh - 48px);
   display: flex;
   flex-direction: column;
@@ -154,6 +154,101 @@
   background: #fef2f2;
   border-color: #fecaca;
   color: #b91c1c;
+}
+
+/* Nhãn vai trò trợ lý */
+.chat-role {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  margin-bottom: 3px;
+}
+
+/* Bong bóng trợ lý render Markdown — rộng hơn để chứa bảng */
+.chat-msg.assistant .chat-bubble.md {
+  max-width: 95%;
+}
+
+.chat-bubble.md > *:first-child {
+  margin-top: 0;
+}
+
+.chat-bubble.md > *:last-child {
+  margin-bottom: 0;
+}
+
+.chat-bubble.md p {
+  margin: 6px 0;
+}
+
+.chat-bubble.md h1,
+.chat-bubble.md h2,
+.chat-bubble.md h3 {
+  font-size: 14px;
+  margin: 10px 0 4px;
+  color: #0f172a;
+}
+
+.chat-bubble.md ul,
+.chat-bubble.md ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.chat-bubble.md li {
+  margin: 2px 0;
+}
+
+.chat-bubble.md strong {
+  color: #0f172a;
+}
+
+.chat-bubble.md code {
+  background: #f1f5f9;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12.5px;
+}
+
+.chat-bubble.md blockquote {
+  margin: 6px 0;
+  padding: 2px 10px;
+  border-left: 3px solid #cbd5e0;
+  color: #475569;
+}
+
+/* Bảng so sánh */
+.chat-bubble.md table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 12.5px;
+  display: block;
+  overflow-x: auto;
+}
+
+.chat-bubble.md th,
+.chat-bubble.md td {
+  border: 1px solid #cbd5e0;
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-bubble.md thead th {
+  background: #eef2ff;
+  color: #1e293b;
+  font-weight: 700;
+}
+
+.chat-bubble.md tbody tr:nth-child(even) {
+  background: #f8fafc;
+}
+
+.cite-label {
+  font-size: 11px;
+  color: #94a3b8;
+  align-self: center;
 }
 
 .chat-citations {

@@ -390,11 +390,12 @@ def chat(session_id):
     """
     Hỏi-đáp với chatbot trong DocumentPreview.
 
-    Chatbot CHỈ tra cứu thông tin từ các YCKT đã duyệt TRƯỚC ĐÂY (upload kèm session).
+    Chatbot tra cứu thông tin các YCKT đã duyệt TRƯỚC ĐÂY và có thể đối chiếu với
+    TÀI LIỆU ĐANG THẨM ĐỊNH (cả hai nguồn đều khả dụng; LLM tự chọn theo câu hỏi).
 
     Expected JSON:
     {
-        "question": "Van xả áp từng dùng những thông số nào?",
+        "question": "So sánh van xả áp tài liệu này với YCKT trước đây",
         "history": [{"role": "user"|"assistant", "content": "..."}]   // tuỳ chọn
     }
 
@@ -422,10 +423,9 @@ def chat(session_id):
         return jsonify({'error': 'Session chưa sẵn sàng (thiếu analyzer)'}), 409
 
     try:
-        # Chatbot chỉ tra cứu thông tin từ các YCKT TRƯỚC ĐÂY (include_current=False).
-        result = analyzer.answer_question(
-            question, history=history, include_current=False,
-        )
+        # Cả hai nguồn (YCKT trước đây + tài liệu đang xét) đều khả dụng để chatbot
+        # tra cứu hoặc đối chiếu tuỳ câu hỏi.
+        result = analyzer.answer_question(question, history=history)
         return jsonify({'success': True, **result}), 200
     except Exception as e:
         print(f"[API] Lỗi chat: {e}")

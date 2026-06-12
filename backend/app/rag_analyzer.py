@@ -259,6 +259,10 @@ class RAGAnalyzer:
             # ----- Chế độ thật: gọi LLM theo từng chunk -----
             from rag.audit_logic.audit_engine import run_audit
 
+            # Dựng index tài liệu đang xét (cho chatbot so sánh với YCKT trước đây).
+            # Không chặn pipeline thẩm định nếu dựng thất bại.
+            self._build_current_index(html)
+
             limit = min(AUDIT_MAX_CHUNKS, len(chunks))
             audit_chunks = chunks[:limit]
             print(f"[RAG] {len(chunks)} chunks, xử lý {limit} chunks "
@@ -399,6 +403,27 @@ class RAGAnalyzer:
         except Exception as e:  # noqa: BLE001
             print(f"[RAG] Không dựng được kho YCKT lịch sử: {e}")
             self._history_index = self._history_client = self._history_retriever = None
+
+    def _build_current_index(self, main_html: str) -> None:
+        """
+        Dựng index tài liệu ĐANG THẨM ĐỊNH (để chatbot so sánh với YCKT trước đây).
+        Lỗi không chặn pipeline chính.
+        """
+        try:
+            from rag.knowledge_base.vector_db import (
+                build_yckt_index_in_memory, build_hybrid_retriever,
+            )
+            doc_name = self._main_doc_name or "Tài liệu đang thẩm định"
+            self._current_index, self._current_client, nodes = build_yckt_index_in_memory(
+                [(main_html, doc_name)], collection_name="current_doc"
+            )
+            self._current_retriever = build_hybrid_retriever(
+                self._current_index, nodes, top_k=10
+            )
+            print(f"[RAG] Index tài liệu đang xét sẵn sàng ({len(nodes)} node).")
+        except Exception as e:  # noqa: BLE001
+            print(f"[RAG] Không dựng được index tài liệu đang xét: {e}")
+            self._current_index = self._current_client = self._current_retriever = None
 
     # ------------------------------------------------------------------
     # Internal

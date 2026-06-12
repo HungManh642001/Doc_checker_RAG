@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import './ChatPanel.css';
 
 /**
@@ -11,12 +13,12 @@ import './ChatPanel.css';
  *   - sessionId: id phiên thẩm định (bắt buộc).
  */
 
-// Câu hỏi gợi ý — khám phá các loại câu hỏi tra cứu YCKT trước đây.
+// Câu hỏi gợi ý — khám phá các loại câu hỏi.
 const SUGGESTIONS = [
   'Liệt kê các thiết bị/vật liệu có trong các YCKT trước đây.',
-  'Van xả áp từng được dùng với những thông số và giá trị nào?',
-  'Tài liệu YCKT nào có thiết bị này?',
-  'Các YCKT trước đây dùng dải giá trị nào cho thông số này?',
+  'Cho biết thông tin về "Bộ công cụ dụng cụ" trong các YCKT trước đây.',
+  'So sánh thông số Van xả áp của tài liệu này với các YCKT trước đây.',
+  'Van xả áp từng được dùng với dải giá trị nào?',
 ];
 
 function ChatPanel({ sessionId }) {
@@ -103,7 +105,8 @@ function ChatPanel({ sessionId }) {
       <div className="chat-messages" ref={listRef}>
         {messages.length === 0 ? (
           <div className="chat-empty">
-            <p>👋 Tra cứu thông tin thiết bị/vật liệu từ các YCKT đã duyệt trước đây.</p>
+            <p>👋 Tra cứu thông tin thiết bị/vật liệu từ các YCKT trước đây — và đối
+              chiếu với tài liệu đang thẩm định.</p>
             <p className="chat-empty-hint">
               Mỗi mục trong bảng (vd "1.1 Van xả áp") là một thiết bị/vật liệu. Bấm
               một câu hỏi gợi ý để bắt đầu:
@@ -126,18 +129,32 @@ function ChatPanel({ sessionId }) {
         ) : (
           messages.map((m, i) => (
             <div key={i} className={`chat-msg ${m.role} ${m.error ? 'error' : ''}`}>
-              <div className="chat-bubble">{m.content}</div>
+              {m.role === 'assistant' && !m.error && (
+                <div className="chat-role">🤖 Trợ lý</div>
+              )}
+              {m.role === 'assistant' && !m.error ? (
+                <div className="chat-bubble md">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {m.content}
+                  </ReactMarkdown>
+                </div>
+              ) : (
+                <div className="chat-bubble">{m.content}</div>
+              )}
               {m.role === 'assistant' && m.citations && m.citations.length > 0 && (
                 <div className="chat-citations">
+                  <span className="cite-label">Nguồn:</span>
                   {m.citations.map((c, j) => (
                     <span
                       key={j}
-                      className="cite-chip src-a"
-                      title={`${c.doc_name}${
+                      className={`cite-chip ${
+                        c.source === 'Tài liệu đang xét' ? 'src-b' : 'src-a'
+                      }`}
+                      title={`${c.source} · ${c.doc_name}${
                         c.section ? ' · Mục: ' + c.section : ''
-                      }${c.param_value ? ' · Giá trị: ' + c.param_value : ''}`}
+                      }`}
                     >
-                      📄 {c.doc_name}
+                      {c.source === 'Tài liệu đang xét' ? '📝' : '📄'} {c.doc_name}
                       {c.section ? ` · ${c.section}` : ''}
                     </span>
                   ))}

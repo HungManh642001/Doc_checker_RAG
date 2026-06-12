@@ -275,23 +275,33 @@ def chunk_html_table(
         total_cols = _count_cols(header_rows[0])
         header_html = ''.join(str(r) for r in header_rows)
 
-        current_section = ''
+        # Ngăn xếp phân cấp mục: giữ ĐƯỜNG DẪN cha→con (vd "1 Bộ công cụ dụng cụ >
+        # 1.1 Van xả áp") để khi hỏi tên mục CHA vẫn truy hồi được các mục con.
+        section_stack: List[Tuple[int, str]] = []
         batch: List[Tag] = []
+
+        def _path() -> str:
+            return ' > '.join(t for _, t in section_stack)
 
         for row in data_rows:
             if _is_section_header(row, total_cols):
                 if batch:
-                    chunks.append(_make_chunk(header_html, batch, current_section))
+                    chunks.append(_make_chunk(header_html, batch, _path()))
                     batch = []
-                current_section = row.get_text(separator=' ', strip=True)
+                text = row.get_text(separator=' ', strip=True)
+                depth = _section_depth(text)
+                # Mở mục mới ở độ sâu `depth`: bỏ các mục cùng cấp/sâu hơn trên stack
+                while section_stack and section_stack[-1][0] >= depth:
+                    section_stack.pop()
+                section_stack.append((depth, text))
             else:
                 batch.append(row)
                 if len(batch) >= chunk_size:
-                    chunks.append(_make_chunk(header_html, batch, current_section))
+                    chunks.append(_make_chunk(header_html, batch, _path()))
                     batch = []
 
         if batch:
-            chunks.append(_make_chunk(header_html, batch, current_section))
+            chunks.append(_make_chunk(header_html, batch, _path()))
 
     # Fallback: không tìm thấy bảng nào có cấu trúc hợp lệ
     if not chunks:
@@ -302,6 +312,18 @@ def chunk_html_table(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Số mục đầu dòng tiêu đề phân cấp: "1", "1.1", "1.1.3" → độ sâu = số phần.
+_RE_SECTION_NUM = re.compile(r'^\s*(\d+(?:\.\d+)*)')
+
+
+def _section_depth(text: str) -> int:
+    """Độ sâu phân cấp của một dòng tiêu đề mục theo số đầu dòng (mặc định 1)."""
+    m = _RE_SECTION_NUM.match(text or '')
+    if not m:
+        return 1  # không có số → coi như mục cấp cao nhất
+    return m.group(1).count('.') + 1
+
 
 def _is_wrapper_table(table: Tag) -> bool:
     """
