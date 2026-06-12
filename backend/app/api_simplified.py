@@ -390,14 +390,12 @@ def chat(session_id):
     """
     Hỏi-đáp với chatbot trong DocumentPreview.
 
-    Trả lời dựa trên kho YCKT lịch sử (upload kèm session) và tài liệu đang xét.
+    Chatbot CHỈ tra cứu thông tin từ các YCKT đã duyệt TRƯỚC ĐÂY (upload kèm session).
 
     Expected JSON:
     {
-        "question": "Áp suất van xả áp đã từng dùng giá trị nào?",
-        "history": [{"role": "user"|"assistant", "content": "..."}],  // tuỳ chọn
-        "focusParam": "Van xả áp",                                    // tuỳ chọn
-        "includeCurrent": false   // tuỳ chọn; false = chỉ tra cứu YCKT trước đây
+        "question": "Van xả áp từng dùng những thông số nào?",
+        "history": [{"role": "user"|"assistant", "content": "..."}]   // tuỳ chọn
     }
 
     Response:
@@ -418,18 +416,15 @@ def chat(session_id):
         return jsonify({'error': 'Trường "question" là bắt buộc'}), 400
 
     history = data.get('history') or []
-    focus_param = data.get('focusParam')
-    # includeCurrent=False → chỉ tra cứu YCKT trước đây (không lấy tài liệu đang xét)
-    include_current = bool(data.get('includeCurrent', True))
 
     analyzer = _sessions[session_id].get('analyzer')
     if analyzer is None:
         return jsonify({'error': 'Session chưa sẵn sàng (thiếu analyzer)'}), 409
 
     try:
+        # Chatbot chỉ tra cứu thông tin từ các YCKT TRƯỚC ĐÂY (include_current=False).
         result = analyzer.answer_question(
-            question, history=history, focus_param=focus_param,
-            include_current=include_current,
+            question, history=history, include_current=False,
         )
         return jsonify({'success': True, **result}), 200
     except Exception as e:

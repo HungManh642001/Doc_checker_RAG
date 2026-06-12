@@ -19,6 +19,7 @@ from llama_index.embeddings.ollama import OllamaEmbedding
 from rag.config import OLLAMA_URL, EMBEDDING_MODEL, EMBEDDING_MODEL_PATH, EMBEDDING_CACHE_FOLDER
 from rag.document_processing.chunker import (
     chunk_html_table, build_yckt_row_payload, build_yckt_section_payload,
+    build_yckt_overview_payload,
 )
 
 # embed_model = HuggingFaceEmbedding(
@@ -276,28 +277,42 @@ def yckt_sections_to_nodes(
     nodes: List[TextNode] = []
     chunks = chunk_html_table(html_content, chunk_size=max_rows, header_rows_count=2)
 
+    section_names: List[str] = []
+
+    def _embed_payload(payload) -> bool:
+        """Nhúng vector & gắn node từ payload. True nếu thành công."""
+        text_for_embed = clean_text_for_embedding(payload["embed_source"])
+        if not text_for_embed:
+            return False
+        try:
+            vector = embed_model.get_text_embedding(text_for_embed)
+        except Exception as e:  # noqa: BLE001
+            print(f"[RAG] Lỗi embedding YCKT '{doc_name}': {e}")
+            return False
+        if any(math.isnan(v) for v in vector):
+            return False
+        node = TextNode(text=payload["text_for_llm"], metadata=payload["metadata"])
+        node.embedding = vector
+        nodes.append(node)
+        return True
+
     for chunk in chunks:
         payload = build_yckt_section_payload(chunk, doc_name)
         if payload is None:
             continue
+        if _embed_payload(payload):
+            sec = payload["metadata"].get("section")
+            if sec:
+                section_names.append(sec)
 
-        text_for_embed = clean_text_for_embedding(payload["embed_source"])
-        if not text_for_embed:
-            continue
+    # Node TỔNG QUAN: liệt kê toàn bộ thiết bị/vật liệu của tài liệu (chống sót khi
+    # hỏi 'liệt kê thiết bị trong tài liệu X' mà top_k truy hồi không phủ hết mục).
+    overview = build_yckt_overview_payload(doc_name, section_names)
+    if overview is not None:
+        _embed_payload(overview)
 
-        try:
-            vector = embed_model.get_text_embedding(text_for_embed)
-        except Exception as e:  # noqa: BLE001
-            print(f"[RAG] Lỗi embedding mục YCKT '{doc_name}': {e}")
-            continue
-        if any(math.isnan(v) for v in vector):
-            continue
-
-        node = TextNode(text=payload["text_for_llm"], metadata=payload["metadata"])
-        node.embedding = vector
-        nodes.append(node)
-
-    print(f"  -> YCKT '{doc_name}': bóc tách & nhúng {len(nodes)} mục.")
+    print(f"  -> YCKT '{doc_name}': bóc tách & nhúng {len(nodes)} node "
+          f"({len(section_names)} mục + tổng quan).")
     return nodes
 
 

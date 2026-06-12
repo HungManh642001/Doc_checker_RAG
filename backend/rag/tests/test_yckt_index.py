@@ -14,8 +14,18 @@ from rag.document_processing.chunker import (
     row_chunk_to_fields,
     build_yckt_row_payload,
     build_yckt_section_payload,
+    build_yckt_overview_payload,
     chunk_html_table,
     extract_muc,
+)
+
+# Bảng nhiều cột (mô phỏng bảng so sánh NSX): thông tin quan trọng nằm ở cột sau
+MULTICOL_TABLE = (
+    "<table>"
+    "<tr><th>TT</th><th>Tên</th><th>Yêu cầu</th><th>Sở cứ NSX</th></tr>"
+    "<tr><td>1.1.3</td><td>Áp suất</td><td>0,3 đến 0,95 MPa</td>"
+    "<td>NSX dùng VHS3 trang 1</td></tr>"
+    "</table>"
 )
 
 
@@ -150,6 +160,39 @@ def test_build_yckt_section_payload_empty():
     print("[OK] test_build_yckt_section_payload_empty")
 
 
+def test_section_payload_embeds_all_columns_and_headers():
+    """embed_source gồm MỌI cột (recall) + text_for_llm có nhãn cột."""
+    payload = build_yckt_section_payload(MULTICOL_TABLE, "YCKT_2024.docx")
+    assert payload is not None
+    # Thông tin ở cột sau (sở cứ NSX) phải có trong embed_source → tìm được khi hỏi
+    assert "VHS3" in payload["embed_source"], "embed_source bỏ sót cột sau"
+    # text_for_llm có dòng nhãn cột để LLM hiểu ý nghĩa từng cột
+    assert "Cột:" in payload["text_for_llm"]
+    assert "Sở cứ NSX" in payload["text_for_llm"]
+    assert "NSX dùng VHS3 trang 1" in payload["text_for_llm"]
+    print("[OK] test_section_payload_embeds_all_columns_and_headers")
+
+
+def test_build_yckt_overview_payload():
+    payload = build_yckt_overview_payload(
+        "YCKT_2024.docx", ["1.1 Van xả áp", "1.2 Cờ lê SMA", "1.1 Van xả áp"]
+    )
+    assert payload is not None
+    assert payload["metadata"]["section"] == "(Tổng quan tài liệu)"
+    # liệt kê đủ thiết bị, khử trùng
+    assert "Van xả áp" in payload["text_for_llm"]
+    assert "Cờ lê SMA" in payload["text_for_llm"]
+    assert payload["text_for_llm"].count("Van xả áp") == 1  # đã khử trùng
+    assert "YCKT_2024.docx" in payload["text_for_llm"]
+    print("[OK] test_build_yckt_overview_payload")
+
+
+def test_build_yckt_overview_payload_empty():
+    assert build_yckt_overview_payload("d.docx", []) is None
+    assert build_yckt_overview_payload("d.docx", ["", "  "]) is None
+    print("[OK] test_build_yckt_overview_payload_empty")
+
+
 if __name__ == "__main__":
     test_row_chunk_to_fields()
     test_row_chunk_to_fields_no_data()
@@ -159,4 +202,7 @@ if __name__ == "__main__":
     test_section_grouping_one_chunk_per_section()
     test_build_yckt_section_payload_full_section()
     test_build_yckt_section_payload_empty()
+    test_section_payload_embeds_all_columns_and_headers()
+    test_build_yckt_overview_payload()
+    test_build_yckt_overview_payload_empty()
     print("\nTất cả test bước 1+ PASSED.")

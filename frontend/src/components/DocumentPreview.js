@@ -23,7 +23,6 @@ function DocumentPreview({ sessionId, errors }) {
   const [editValue, setEditValue] = useState('');
   const [accepted, setAccepted] = useState({}); // errorId -> fixedValue
   const [downloading, setDownloading] = useState(false);
-  const [chatPrefill, setChatPrefill] = useState(null); // {question, focusParam}
   const containerRef = useRef(null);
 
   // Tải HTML tài liệu
@@ -128,25 +127,6 @@ function DocumentPreview({ sessionId, errors }) {
     setEditValue(selected.suggestion || '');
   };
 
-  // Mở chatbot và điền sẵn câu hỏi về THIẾT BỊ/VẬT LIỆU (mục) chứa thông số đang
-  // chọn — yêu cầu cung cấp thông tin từ các YCKT trước đây, viện dẫn rõ tài liệu.
-  const askAboutSelected = () => {
-    if (!selected) return;
-    const sec = (selected.section || '').trim();
-    // Tên thiết bị/vật liệu = đề mục bỏ tiền tố đánh số ("1.1 Van xả áp" → "Van xả áp")
-    const device = sec.replace(/^[\d.\s]+/, '').trim();
-    const subject =
-      device || sec || (selected.original_text || '').trim() || 'thiết bị/vật liệu này';
-    setChatPrefill({
-      question:
-        `Hãy cung cấp thông tin về "${subject}" được sử dụng trong các tài liệu yêu ` +
-        `cầu kỹ thuật trước đây. Nêu rõ tài liệu YCKT nào cung cấp thông tin đó; nếu ` +
-        `nhiều tài liệu cùng có, ghi rõ thông tin nào tương ứng với tài liệu nào.`,
-      focusParam: subject,
-      includeCurrent: false, // chỉ lấy thông tin từ YCKT trước đây để đối chiếu
-    });
-  };
-
   const acceptedCount = Object.keys(accepted).length;
 
   const downloadCorrected = async () => {
@@ -232,13 +212,6 @@ function DocumentPreview({ sessionId, errors }) {
             <div className="dp-section">
               <strong>📌 Nội dung gốc</strong>
               <code>{selected.original_text}</code>
-              <button
-                className="dp-ask-btn"
-                onClick={askAboutSelected}
-                title="Hỏi chatbot xem thông số này đã từng dùng trong YCKT trước đây chưa"
-              >
-                💬 Hỏi về thông số này
-              </button>
             </div>
             <div className="dp-section">
               <strong>🔴 Lỗi phát hiện</strong>
@@ -293,18 +266,14 @@ function DocumentPreview({ sessionId, errors }) {
                 ' (Một số lỗi nằm trong nội dung không khớp chính xác nên không tô được.)'}
             </p>
             <p className="dp-hint">
-              💬 Cần đối chiếu với YCKT trước đây? Mở <strong>Hỏi đáp</strong> ở góc phải
-              dưới, hoặc bấm “Hỏi về thông số này” khi xem chi tiết một lỗi.
+              💬 Cần tra cứu thông tin thiết bị từ các YCKT trước đây? Mở{' '}
+              <strong>Hỏi đáp YCKT trước đây</strong> ở góc phải dưới.
             </p>
           </div>
         )}
       </div>
 
-      <ChatPanel
-        sessionId={sessionId}
-        prefill={chatPrefill}
-        onConsumePrefill={() => setChatPrefill(null)}
-      />
+      <ChatPanel sessionId={sessionId} />
     </div>
   );
 }

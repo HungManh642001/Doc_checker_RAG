@@ -11,6 +11,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+# Chỉ import các module NHẸ ở cấp cao nhất. Các module nặng phụ thuộc llama_index
+# (vector_db, audit_engine, audit_models) được import LAZY bên trong phương thức,
+# để chế độ MOCK_MODE chạy được kể cả khi không có llama_index / không kết nối được.
+from rag.knowledge_base.rules import load_rules_from_files
+from rag.document_processing.chunker import chunk_html_table, extract_muc
+from rag.config import (
+    MOCK_MODE, AUDIT_CONCURRENCY, AUDIT_CHUNK_MAX_ROWS, AUDIT_MAX_CHUNKS,
+)
+
 # Tiền tố do API gắn khi lưu file upload (ref_0_, rule_1_, hist_2_...). Khi không có
 # tên gốc, ta strip tiền tố này để tên tài liệu hiển thị/viện dẫn đỡ xấu.
 _UPLOAD_PREFIX_RE = re.compile(r'^(?:ref|rule|hist)_\d+_')
@@ -27,14 +36,6 @@ def clean_doc_name(path: str, display_name: Optional[str] = None) -> str:
         return display_name
     return _UPLOAD_PREFIX_RE.sub('', os.path.basename(path))
 
-# Chỉ import các module NHẸ ở cấp cao nhất. Các module nặng phụ thuộc llama_index
-# (vector_db, audit_engine, audit_models) được import LAZY bên trong phương thức,
-# để chế độ MOCK_MODE chạy được kể cả khi không có llama_index / không kết nối được.
-from rag.knowledge_base.rules import load_rules_from_files
-from rag.document_processing.chunker import chunk_html_table, extract_muc
-from rag.config import (
-    MOCK_MODE, AUDIT_CONCURRENCY, AUDIT_CHUNK_MAX_ROWS, AUDIT_MAX_CHUNKS,
-)
 
 # Sở cứ mặc định đi kèm hệ thống (NĐ 86/2012) — dùng khi người dùng không upload sở cứ.
 _DEFAULT_REFERENCE_DIR = (
@@ -258,10 +259,6 @@ class RAGAnalyzer:
             # ----- Chế độ thật: gọi LLM theo từng chunk -----
             from rag.audit_logic.audit_engine import run_audit
 
-            # Dựng index tài liệu đang xét (NGUỒN B cho chatbot) — chẻ theo dòng.
-            # Không chặn pipeline thẩm định nếu dựng thất bại.
-            self._build_current_index(html)
-
             limit = min(AUDIT_MAX_CHUNKS, len(chunks))
             audit_chunks = chunks[:limit]
             print(f"[RAG] {len(chunks)} chunks, xử lý {limit} chunks "
@@ -396,30 +393,12 @@ class RAGAnalyzer:
                 html_docs, collection_name="yckt_history"
             )
             self._history_retriever = build_hybrid_retriever(
-                self._history_index, nodes, top_k=8
+                self._history_index, nodes, top_k=10
             )
-            print(f"[RAG] Kho YCKT lịch sử sẵn sàng ({len(nodes)} mục thiết bị).")
+            print(f"[RAG] Kho YCKT lịch sử sẵn sàng ({len(nodes)} node).")
         except Exception as e:  # noqa: BLE001
             print(f"[RAG] Không dựng được kho YCKT lịch sử: {e}")
             self._history_index = self._history_client = self._history_retriever = None
-
-    def _build_current_index(self, main_html: str) -> None:
-        """Dựng index tài liệu đang xét (NGUỒN B). Lỗi không chặn pipeline chính."""
-        try:
-            from rag.knowledge_base.vector_db import (
-                build_yckt_index_in_memory, build_hybrid_retriever,
-            )
-            doc_name = self._main_doc_name or "Tài liệu đang xét"
-            self._current_index, self._current_client, nodes = build_yckt_index_in_memory(
-                [(main_html, doc_name)], collection_name="current_doc"
-            )
-            self._current_retriever = build_hybrid_retriever(
-                self._current_index, nodes, top_k=8
-            )
-            print(f"[RAG] Index tài liệu hiện tại sẵn sàng ({len(nodes)} mục thiết bị).")
-        except Exception as e:  # noqa: BLE001
-            print(f"[RAG] Không dựng được index tài liệu hiện tại: {e}")
-            self._current_index = self._current_client = self._current_retriever = None
 
     # ------------------------------------------------------------------
     # Internal

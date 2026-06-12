@@ -187,23 +187,6 @@ mark.err-mark.fixed {
   white-space: pre-wrap;
 }
 
-.dp-ask-btn {
-  margin-top: 8px;
-  background: #eff6ff;
-  color: #1d4ed8;
-  border: 1px solid #93c5fd;
-  border-radius: 6px;
-  padding: 7px 12px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.dp-ask-btn:hover {
-  background: #dbeafe;
-}
-
 .dp-suberr {
   background: #fff5e6;
   border-left: 3px solid #f39c12;
