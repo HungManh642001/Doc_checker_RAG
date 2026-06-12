@@ -93,3 +93,7 @@ AUDIT_MAX_CHUNKS = int(_get("AUDIT_MAX_CHUNKS", "60"))
 # Số node truy hồi cho CHATBOT (mỗi nguồn). Cao hơn audit vì câu hỏi có thể cần
 # nhiều mẩu thông tin nằm xa nhau (trong bảng + ngoài bảng, nhiều mục).
 CHAT_TOP_K = int(_get("CHAT_TOP_K", "12"))
+
+# Thẩm định NỘI DUNG (warning): đối chiếu thông số tài liệu đang xét với YCKT trước
+# đây. Chỉ chạy khi có kho YCKT lịch sử. Kết quả chỉ là cảnh báo, không phải lỗi.
+CONTENT_AUDIT_ENABLED = _get("CONTENT_AUDIT_ENABLED", "true").strip().lower() == "true"

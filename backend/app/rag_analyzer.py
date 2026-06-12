@@ -18,7 +18,7 @@ from rag.knowledge_base.rules import load_rules_from_files
 from rag.document_processing.chunker import chunk_html_table, extract_muc
 from rag.config import (
     MOCK_MODE, AUDIT_CONCURRENCY, AUDIT_CHUNK_MAX_ROWS, AUDIT_MAX_CHUNKS,
-    CHAT_TOP_K,
+    CHAT_TOP_K, CONTENT_AUDIT_ENABLED,
 )
 
 # Tiền tố do API gắn khi lưu file upload (ref_0_, rule_1_, hist_2_...). Khi không có
@@ -266,8 +266,14 @@ class RAGAnalyzer:
 
             limit = min(AUDIT_MAX_CHUNKS, len(chunks))
             audit_chunks = chunks[:limit]
-            print(f"[RAG] {len(chunks)} chunks, xử lý {limit} chunks "
-                  f"song song ({AUDIT_CONCURRENCY} luồng).")
+
+            # Thẩm định NỘI DUNG (warning) — chỉ khi có kho YCKT lịch sử để đối chiếu.
+            run_content = (
+                CONTENT_AUDIT_ENABLED and self._history_retriever is not None
+            )
+            print(f"[RAG] {len(chunks)} chunks, xử lý {limit} chunks song song "
+                  f"({AUDIT_CONCURRENCY} luồng)"
+                  + ("; có đối chiếu nội dung." if run_content else "."))
 
             # Thẩm định song song: vLLM batch nhiều request → nhanh hơn nhiều so với
             # gọi tuần tự. Phần truy hồi được khoá tuần tự (Qdrant không thread-safe),
@@ -275,33 +281,43 @@ class RAGAnalyzer:
             retrieve_lock = threading.Lock()
 
             def _audit_one(idx: int, chunk: str):
-                ket_qua = run_audit(
+                return run_audit(
                     self._index, chunk, self._rules, top_k=top_k,
                     retriever=self._retriever, retrieve_lock=retrieve_lock,
                 )
-                return ket_qua
 
-            ordered: List = [None] * len(audit_chunks)
+            def _content_one(idx: int, chunk: str):
+                from rag.audit_logic.audit_content import run_content_audit
+                return run_content_audit(
+                    self._history_retriever, chunk, top_k=CHAT_TOP_K,
+                    retrieve_lock=retrieve_lock,
+                )
+
+            formal_ordered: List = [None] * len(audit_chunks)
+            content_ordered: List = [None] * len(audit_chunks)
             max_workers = max(1, min(AUDIT_CONCURRENCY, len(audit_chunks)))
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_idx = {
-                    executor.submit(_audit_one, idx, chunk): idx
-                    for idx, chunk in enumerate(audit_chunks)
-                }
-                for future in as_completed(future_to_idx):
-                    idx = future_to_idx[future]
-                    try:
-                        ket_qua = future.result()
-                        ordered[idx] = (audit_chunks[idx], ket_qua)
-                        n = len(ket_qua.danh_sach_loi)
-                        print(f"[RAG]   chunk {idx + 1}/{limit} -> "
-                              + (f"{n} lỗi" if n else "Hợp lệ"))
-                    except Exception as e:  # noqa: BLE001
-                        print(f"[RAG] Lỗi chunk {idx + 1}: {e}")
-                        ordered[idx] = (audit_chunks[idx], None)
+                future_meta = {}
+                for idx, chunk in enumerate(audit_chunks):
+                    future_meta[executor.submit(_audit_one, idx, chunk)] = ('formal', idx)
+                    if run_content:
+                        future_meta[executor.submit(_content_one, idx, chunk)] = ('content', idx)
 
-            all_errors = self._assemble_errors(ordered)
-            print(f"[RAG] Hoàn tất: {len(all_errors)} lỗi.")
+                for future in as_completed(future_meta):
+                    kind, idx = future_meta[future]
+                    try:
+                        result = future.result()
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[RAG] Lỗi {kind} chunk {idx + 1}: {e}")
+                        result = None
+                    target = formal_ordered if kind == 'formal' else content_ordered
+                    target[idx] = (audit_chunks[idx], result)
+
+            all_errors = self._assemble_errors(formal_ordered)
+            warnings = self._assemble_warnings(content_ordered) if run_content else []
+            all_errors.extend(warnings)
+            print(f"[RAG] Hoàn tất: {len(all_errors) - len(warnings)} lỗi, "
+                  f"{len(warnings)} cảnh báo nội dung.")
             return all_errors
 
         except Exception as e:
@@ -455,6 +471,44 @@ class RAGAnalyzer:
                 if entry:
                     all_errors.append(entry)
         return all_errors
+
+    def _assemble_warnings(self, ordered: List) -> List[Dict]:
+        """
+        Gom kết quả thẩm định NỘI DUNG (KetQuaNoiDung) thành danh sách CẢNH BÁO
+        (severity='warning'), cùng định dạng dict như lỗi để frontend tái dùng.
+        """
+        warnings: List[Dict] = []
+        for idx, item in enumerate(ordered):
+            if not item:
+                continue
+            chunk, ket_qua = item
+            if ket_qua is None:
+                continue
+            section = extract_muc(chunk)
+            for w_idx, cb in enumerate(getattr(ket_qua, "danh_sach_canh_bao", []) or []):
+                try:
+                    original = (cb.original_text or "").strip()
+                    if not original:
+                        continue
+                    warnings.append({
+                        "id": f"warn_c{idx}_{w_idx}",
+                        "original_text": original,
+                        "section": section,
+                        "elementId": f"chunk_{idx}",
+                        "elementType": "chunk",
+                        "danh_sach_cac_loi": [{
+                            "error_type": f"Đối chiếu nội dung — {cb.muc_do}",
+                            "reasoning": cb.reasoning,
+                            "severity": "warning",
+                        }],
+                        "suggestion": "",  # cảnh báo tham khảo, không tự sửa
+                        "reference_location": cb.reference_location,
+                        "reference_quote": cb.reference_quote,
+                        "severity": "warning",
+                    })
+                except Exception as e:  # noqa: BLE001
+                    print(f"[RAG] Lỗi transform cảnh báo: {e}")
+        return warnings
 
     def _transform_error(
         self, error, chunk_idx: int, err_idx: int = 0, section: str = ""

@@ -98,3 +98,19 @@ class LoiThamDinh(BaseModel):
 
 class KetQuaThamDinh(BaseModel):
     danh_sach_loi: List[LoiThamDinh] = Field(description="Danh sách các lỗi. Nếu không có lỗi, trả về [].")
+
+
+class CanhBaoNoiDung(BaseModel):
+    """Một cảnh báo (WARNING, không phải lỗi) khi đối chiếu nội dung với YCKT cũ."""
+    original_text: str = Field(..., description="Thông số/giá trị NGUYÊN VĂN trong tài liệu đang xét được đối chiếu.")
+    muc_do: str = Field(..., description="Mức độ: 'Cần lưu ý' hoặc 'Khác biệt lớn'.")
+    reasoning: str = Field(..., description="So sánh giá trị trong tài liệu đang xét vs giá trị thiết bị tương ứng trong YCKT trước đây; vì sao cần lưu ý (lệch dải, khác đáng kể, khác đơn vị...).")
+    reference_location: str = Field(..., description="Tên tài liệu YCKT trước đây + mục/thiết bị chứa giá trị đối chiếu.")
+    reference_quote: str = Field(..., description="Trích NGUYÊN VĂN giá trị tương ứng từ YCKT trước đây. TUYỆT ĐỐI KHÔNG BỊA.")
+
+
+class KetQuaNoiDung(BaseModel):
+    danh_sach_canh_bao: List[CanhBaoNoiDung] = Field(
+        default_factory=list,
+        description="Danh sách cảnh báo đối chiếu nội dung. Rỗng nếu phù hợp hoặc không có cơ sở đối chiếu trong sở cứ.",
+    )

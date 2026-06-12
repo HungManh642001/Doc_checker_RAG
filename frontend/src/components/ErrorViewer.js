@@ -13,6 +13,12 @@ import './ErrorViewer.css';
 function ErrorViewer({ errors }) {
   const [expandedErrorId, setExpandedErrorId] = useState(null);
 
+  const errCount = useMemo(
+    () => errors.filter((e) => e.severity !== 'warning').length,
+    [errors]
+  );
+  const warnCount = errors.length - errCount;
+
   // Thống kê theo loại lỗi để xem nhanh bức tranh tổng thể
   const typeCounts = useMemo(() => {
     const m = {};
@@ -30,11 +36,22 @@ function ErrorViewer({ errors }) {
       <div className="error-header">
         <div className="header-content">
           <h1>📋 Kết quả thẩm định</h1>
-          <p className="subtitle">Phát hiện {errors.length} lỗi cần xem xét</p>
+          <p className="subtitle">
+            Phát hiện <strong>{errCount}</strong> lỗi
+            {warnCount > 0 && (
+              <> và <strong>{warnCount}</strong> cảnh báo nội dung</>
+            )}{' '}
+            cần xem xét
+          </p>
           <div className="stats">
             <span className="stat-item total">
-              📊 Tổng: <strong>{errors.length}</strong>
+              ❌ Lỗi: <strong>{errCount}</strong>
             </span>
+            {warnCount > 0 && (
+              <span className="stat-item total" style={{ background: '#fef3c7', color: '#b9770e' }}>
+                ⚠️ Cảnh báo: <strong>{warnCount}</strong>
+              </span>
+            )}
             {typeCounts.map(([t, c]) => (
               <span key={t} className="stat-item type">
                 {t}: <strong>{c}</strong>
@@ -60,17 +77,19 @@ function ErrorViewer({ errors }) {
         ) : (
           errors.map((error) => {
             const isExpanded = expandedErrorId === error.id;
+            const isWarn = error.severity === 'warning';
+            const color = isWarn ? '#f39c12' : '#e74c3c';
             return (
               <div
                 key={error.id}
                 className="error-item"
-                style={{ borderLeftColor: '#e74c3c' }}
+                style={{ borderLeftColor: color }}
               >
                 <div className="error-item-header">
                   <div className="error-main-info">
                     <div className="error-title-row">
-                      <span className="severity-badge" style={{ backgroundColor: '#e74c3c' }}>
-                        ❌ LỖI
+                      <span className="severity-badge" style={{ backgroundColor: color }}>
+                        {isWarn ? '⚠️ CẢNH BÁO' : '❌ LỖI'}
                       </span>
                     </div>
 
@@ -80,7 +99,7 @@ function ErrorViewer({ errors }) {
                     </div>
 
                     <div className="error-list-container">
-                      <strong>🔴 Lỗi phát hiện:</strong>
+                      <strong>{isWarn ? '⚠️ Đối chiếu phát hiện:' : '🔴 Lỗi phát hiện:'}</strong>
                       <div className="error-details-list">
                         {(error.danh_sach_cac_loi || []).map((err, idx) => (
                           <div key={idx} className="error-detail-item">
@@ -104,16 +123,20 @@ function ErrorViewer({ errors }) {
 
                 {isExpanded && (
                   <div className="error-expanded-content">
-                    <div className="suggestion-section">
-                      <strong>💡 Đề xuất sửa chữa:</strong>
-                      <div className="suggestion-display">
-                        <code>{error.suggestion}</code>
+                    {!isWarn && error.suggestion && (
+                      <div className="suggestion-section">
+                        <strong>💡 Đề xuất sửa chữa:</strong>
+                        <div className="suggestion-display">
+                          <code>{error.suggestion}</code>
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     <div className="reference-section">
                       <div className="reference-box">
-                        <strong>📖 Tham chiếu sở cứ:</strong>
+                        <strong>
+                          {isWarn ? '📖 Đối chiếu YCKT trước đây:' : '📖 Tham chiếu sở cứ:'}
+                        </strong>
                         <p className="reference-location">{error.reference_location}</p>
                         <p className="reference-quote">{error.reference_quote}</p>
                       </div>

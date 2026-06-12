@@ -82,6 +82,43 @@ def test_assemble_empty():
     print("[OK] test_assemble_empty")
 
 
+class _FakeCanhBao:
+    def __init__(self, original_text, muc_do, reasoning, ref_loc, ref_quote):
+        self.original_text = original_text
+        self.muc_do = muc_do
+        self.reasoning = reasoning
+        self.reference_location = ref_loc
+        self.reference_quote = ref_quote
+
+
+class _FakeNoiDung:
+    def __init__(self, items):
+        self.danh_sach_canh_bao = items
+
+
+def test_assemble_warnings():
+    analyzer = RAGAnalyzer()
+    ordered = [
+        (_chunk("1.1 Van xả áp"), _FakeNoiDung([
+            _FakeCanhBao("0,3 MPa", "Khác biệt lớn", "lệch dải so với trước",
+                         "YCKT_2023.docx - Van xả áp", "0,1 đến 1,0 MPa"),
+        ])),
+        (_chunk("1.2 Cờ lê"), _FakeNoiDung([])),  # không cảnh báo
+        (_chunk("X"), None),                       # chunk lỗi
+    ]
+    ws = analyzer._assemble_warnings(ordered)
+    assert len(ws) == 1, ws
+    w = ws[0]
+    assert w["severity"] == "warning"
+    assert w["id"] == "warn_c0_0"
+    assert w["original_text"] == "0,3 MPa"
+    assert "Đối chiếu nội dung" in w["danh_sach_cac_loi"][0]["error_type"]
+    assert w["danh_sach_cac_loi"][0]["severity"] == "warning"
+    assert w["reference_location"] == "YCKT_2023.docx - Van xả áp"
+    assert w["suggestion"] == ""  # cảnh báo không tự sửa
+    print("[OK] test_assemble_warnings")
+
+
 def test_clean_doc_name():
     # Ưu tiên tên gốc (giữ dấu tiếng Việt)
     assert clean_doc_name(
@@ -99,5 +136,6 @@ if __name__ == "__main__":
     test_assemble_preserves_order_and_ids()
     test_assemble_skips_failed_chunks()
     test_assemble_empty()
+    test_assemble_warnings()
     test_clean_doc_name()
     print("\nTất cả test song song-hoá PASSED.")
