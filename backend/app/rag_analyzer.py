@@ -18,6 +18,7 @@ from rag.knowledge_base.rules import load_rules_from_files
 from rag.document_processing.chunker import chunk_html_table, extract_muc
 from rag.config import (
     MOCK_MODE, AUDIT_CONCURRENCY, AUDIT_CHUNK_MAX_ROWS, AUDIT_MAX_CHUNKS,
+    CHAT_TOP_K,
 )
 
 # Tiền tố do API gắn khi lưu file upload (ref_0_, rule_1_, hist_2_...). Khi không có
@@ -397,7 +398,7 @@ class RAGAnalyzer:
                 html_docs, collection_name="yckt_history"
             )
             self._history_retriever = build_hybrid_retriever(
-                self._history_index, nodes, top_k=10
+                self._history_index, nodes, top_k=CHAT_TOP_K
             )
             print(f"[RAG] Kho YCKT lịch sử sẵn sàng ({len(nodes)} node).")
         except Exception as e:  # noqa: BLE001
@@ -418,7 +419,7 @@ class RAGAnalyzer:
                 [(main_html, doc_name)], collection_name="current_doc"
             )
             self._current_retriever = build_hybrid_retriever(
-                self._current_index, nodes, top_k=10
+                self._current_index, nodes, top_k=CHAT_TOP_K
             )
             print(f"[RAG] Index tài liệu đang xét sẵn sàng ({len(nodes)} node).")
         except Exception as e:  # noqa: BLE001

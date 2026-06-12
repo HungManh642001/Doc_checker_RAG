@@ -15,9 +15,26 @@ from rag.document_processing.chunker import (
     build_yckt_row_payload,
     build_yckt_section_payload,
     build_yckt_overview_payload,
+    build_yckt_prose_payloads,
     chunk_html_table,
     extract_muc,
     _section_depth,
+    _looks_like_heading,
+)
+from bs4 import BeautifulSoup
+
+# Tài liệu có cả nội dung NGOÀI bảng (trước & sau bảng) lẫn bảng
+DOC_WITH_PROSE = (
+    "<body>"
+    "<h2>Phần I. Giới thiệu chung</h2>"
+    "<p>Thiết bị phải tuân thủ tiêu chuẩn ABC và có thời gian bảo hành 24 tháng.</p>"
+    "<table>"
+    "<tr><th>TT</th><th>Tên</th><th>Giá trị</th></tr>"
+    "<tr><td>1.1</td><td colspan='2'>Van xả áp</td></tr>"
+    "<tr><td>1.1.1</td><td>Áp suất</td><td>0,3 MPa</td></tr>"
+    "</table>"
+    "<p>Ghi chú: toàn bộ vật liệu phải có khả năng chống ăn mòn trong môi trường biển.</p>"
+    "</body>"
 )
 
 # Bảng nhiều cột (mô phỏng bảng so sánh NSX): thông tin quan trọng nằm ở cột sau
@@ -218,6 +235,37 @@ def test_section_depth():
     print("[OK] test_section_depth")
 
 
+def test_looks_like_heading():
+    def el(html):
+        return BeautifulSoup(html, "html.parser").find()
+    assert _looks_like_heading(el("<h2>Giới thiệu</h2>"), "Giới thiệu") is True
+    assert _looks_like_heading(el("<p>Phụ lục 1 chỉ tiêu</p>"), "Phụ lục 1 chỉ tiêu") is True
+    long_p = "Đây là một đoạn văn dài bình thường " * 6
+    assert _looks_like_heading(el(f"<p>{long_p}</p>"), long_p) is False
+    print("[OK] test_looks_like_heading")
+
+
+def test_prose_payloads_capture_nontable_content():
+    """Nội dung NGOÀI bảng (trước & sau bảng) phải được trích, bảng thì KHÔNG."""
+    payloads = build_yckt_prose_payloads(DOC_WITH_PROSE, "d.docx")
+    alltext = "\n".join(p["text_for_llm"] for p in payloads)
+
+    # văn bản trước & sau bảng đều được giữ
+    assert "bảo hành 24 tháng" in alltext, "Mất văn bản TRƯỚC bảng"
+    assert "chống ăn mòn" in alltext, "Mất văn bản SAU bảng"
+    # nội dung BẢNG không lọt vào prose (xử lý riêng)
+    assert "0,3 MPa" not in alltext
+    assert "Van xả áp" not in alltext
+    # gom theo tiêu đề gần nhất
+    assert any("Giới thiệu chung" in p["metadata"]["section"] for p in payloads)
+    print("[OK] test_prose_payloads_capture_nontable_content")
+
+
+def test_prose_payloads_empty():
+    assert build_yckt_prose_payloads("<table><tr><td>x</td></tr></table>", "d.docx") == []
+    print("[OK] test_prose_payloads_empty")
+
+
 if __name__ == "__main__":
     test_row_chunk_to_fields()
     test_row_chunk_to_fields_no_data()
@@ -232,4 +280,7 @@ if __name__ == "__main__":
     test_build_yckt_overview_payload()
     test_build_yckt_overview_payload_empty()
     test_section_depth()
+    test_looks_like_heading()
+    test_prose_payloads_capture_nontable_content()
+    test_prose_payloads_empty()
     print("\nTất cả test bước 1+ PASSED.")

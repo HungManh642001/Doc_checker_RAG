@@ -89,3 +89,7 @@ AUDIT_CHUNK_MAX_ROWS = int(_get("AUDIT_CHUNK_MAX_ROWS", "8"))
 # Trần số chunk thẩm định (chống tài liệu quá dài làm treo). Tăng so với giới hạn
 # cứng 20 cũ vì đã song song hóa + gom mục.
 AUDIT_MAX_CHUNKS = int(_get("AUDIT_MAX_CHUNKS", "60"))
+
+# Số node truy hồi cho CHATBOT (mỗi nguồn). Cao hơn audit vì câu hỏi có thể cần
+# nhiều mẩu thông tin nằm xa nhau (trong bảng + ngoài bảng, nhiều mục).
+CHAT_TOP_K = int(_get("CHAT_TOP_K", "12"))

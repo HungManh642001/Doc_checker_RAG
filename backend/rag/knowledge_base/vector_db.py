@@ -19,7 +19,7 @@ from llama_index.embeddings.ollama import OllamaEmbedding
 from rag.config import OLLAMA_URL, EMBEDDING_MODEL, EMBEDDING_MODEL_PATH, EMBEDDING_CACHE_FOLDER
 from rag.document_processing.chunker import (
     chunk_html_table, build_yckt_row_payload, build_yckt_section_payload,
-    build_yckt_overview_payload,
+    build_yckt_overview_payload, build_yckt_prose_payloads,
 )
 
 # embed_model = HuggingFaceEmbedding(
@@ -311,8 +311,16 @@ def yckt_sections_to_nodes(
     if overview is not None:
         _embed_payload(overview)
 
-    print(f"  -> YCKT '{doc_name}': bóc tách & nhúng {len(nodes)} node "
-          f"({len(section_names)} mục + tổng quan).")
+    # Node NỘI DUNG NGOÀI BẢNG (đoạn văn, tiêu đề, phụ lục...) — chunk_html_table bỏ
+    # qua phần này; bổ sung để chatbot không sót thông tin khi câu hỏi cần cả dữ
+    # liệu trong bảng lẫn ngoài bảng.
+    prose_count = 0
+    for payload in build_yckt_prose_payloads(html_content, doc_name):
+        if _embed_payload(payload):
+            prose_count += 1
+
+    print(f"  -> YCKT '{doc_name}': nhúng {len(nodes)} node "
+          f"({len(section_names)} mục + tổng quan + {prose_count} đoạn ngoài bảng).")
     return nodes
 
 

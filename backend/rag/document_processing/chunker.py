@@ -222,6 +222,82 @@ def build_yckt_overview_payload(
     }
 
 
+def _looks_like_heading(el: Tag, txt: str) -> bool:
+    """Heuristic nhận diện dòng tiêu đề/đề mục văn bản (ngoài bảng)."""
+    if el.name in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+        return True
+    if txt and len(txt) <= 120:
+        bold = ''.join(b.get_text(strip=True) for b in el.find_all(['strong', 'b']))
+        if len(bold) >= 0.6 * len(txt):
+            return True
+        if re.match(r'^(Phụ lục|PHỤ LỤC|Chương|Mục|[IVX]+\.|\d+(\.\d+)*\.?)\s', txt):
+            return True
+    return False
+
+
+def build_yckt_prose_payloads(
+    html_content: str, doc_name: str, max_chars: int = 1200
+) -> List[Dict[str, object]]:
+    """
+    Trích nội dung NGOÀI BẢNG (đoạn văn, tiêu đề, danh sách) thành các node text.
+
+    QUAN TRỌNG: chunk_html_table chỉ xử lý <table> → mọi văn bản ngoài bảng bị bỏ.
+    Hàm này bù phần đó để chatbot không sót thông tin khi câu hỏi cần dữ liệu vừa
+    trong bảng vừa ngoài bảng.
+
+    Gom văn bản theo tiêu đề gần nhất; cắt theo max_chars. Trả list payload giống
+    build_yckt_section_payload (text_for_llm / embed_source / metadata).
+    """
+    soup = BeautifulSoup(html_content, 'html.parser')
+    for t in soup.find_all('table'):
+        t.decompose()  # bảng xử lý riêng ở yckt_sections_to_nodes
+    root = soup.body or soup
+
+    payloads: List[Dict[str, object]] = []
+    current_heading = ''
+    buffer: List[str] = []
+
+    def _flush() -> None:
+        nonlocal buffer
+        text = re.sub(r'\s+', ' ', ' '.join(buffer)).strip()
+        buffer = []
+        if len(text) < 15:
+            return
+        for i in range(0, len(text), max_chars):
+            part = text[i:i + max_chars]
+            ctx = f' | Mục: {current_heading}' if current_heading else ''
+            embed = f'{current_heading}. {part}' if current_heading else part
+            payloads.append({
+                'text_for_llm': f'[Tài liệu: {doc_name}{ctx}]\n{part}',
+                'embed_source': embed,
+                'metadata': {
+                    'doc_name': doc_name,
+                    'section': current_heading or '(Nội dung ngoài bảng)',
+                    'param_name': '',
+                    'param_value': '',
+                    'row_count': 0,
+                },
+            })
+
+    # Duyệt các block văn bản (đệ quy) — bỏ qua <div> để tránh đếm trùng container.
+    # Coi cả TIÊU ĐỀ là nội dung (nhiều tài liệu phần ngoài bảng chỉ gồm tiêu đề/
+    # phụ lục) để chúng vẫn được index & truy hồi.
+    for el in root.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li']):
+        txt = el.get_text(' ', strip=True)
+        if not txt:
+            continue
+        if _looks_like_heading(el, txt):
+            _flush()
+            current_heading = txt
+            buffer.append(txt)  # tiêu đề cũng là nội dung của node
+        else:
+            buffer.append(txt)
+            if sum(len(b) for b in buffer) >= max_chars:
+                _flush()
+    _flush()
+    return payloads
+
+
 def chunk_html_table(
     html_content: str,
     chunk_size: int = 1,
