@@ -18,6 +18,6 @@
 
 ## Quy tắc code
 - Python: black formatter, type hints bắt buộc
-- Tên biến và comment: tiếng Anh, docstring: tiếng Việt được
+- Tên biến và comment: tiếng Anh, docstring: tiếng Anh
 - Mọi thay đổi logic AI pipeline phải kèm test case
 

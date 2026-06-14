@@ -1,9 +1,26 @@
+# ── Web / API ──────────────────────────────────────────────────────────────
 Flask==3.0.0
 Flask-CORS==4.0.0
-python-docx==0.8.11
-python-dotenv==1.0.0
-Flask-SQLAlchemy==3.1.1
 Werkzeug==3.0.1
-openai==1.3.0
-openpyxl==3.1.2
-mammoth==1.6.0
+python-dotenv==1.0.0
+
+# ── Document processing ──────────────────────────────────────────────────────
+python-docx==0.8.11      # read/write DOCX (apply corrections)
+mammoth==1.6.0           # DOCX -> HTML for preview & chunking
+openpyxl==3.1.2          # Excel report export
+beautifulsoup4==4.14.3   # HTML parsing (chunker, query-text extraction)
+
+# ── RAG pipeline (LlamaIndex + Qdrant + Ollama embeddings + LiteLLM/Ollama LLM) ─
+pydantic==2.12.5
+qdrant-client==1.17.1
+llama-index==0.14.19
+llama-index-vector-stores-qdrant==0.10.0
+llama-index-llms-ollama==0.10.1
+llama-index-llms-openai-like==0.6.1
+llama-index-embeddings-ollama==0.9.0
+
+# ── Hybrid retrieval (optional but recommended; code falls back to vector-only
+#    if these are missing). Pin rank-bm25; let pip resolve the retriever plugin
+#    matching the installed llama-index version. ───────────────────────────────
+rank-bm25==0.2.2
+llama-index-retrievers-bm25

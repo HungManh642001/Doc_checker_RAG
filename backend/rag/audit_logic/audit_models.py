@@ -1,8 +1,6 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List
 
-from llama_index.core.postprocessor.types import BaseNodePostprocessor
-from llama_index.core.schema import NodeWithScore
 from llama_index.core import Settings
 from rag.config import (
     LLM_PROVIDER,
@@ -66,25 +64,6 @@ Settings.llm = _build_llm()
 print(f"[RAG] LLM provider = {LLM_PROVIDER} "
       f"({LITELLM_MODEL if LLM_PROVIDER == 'litellm' else OLLAMA_MODEL})")
 
-class DeduplicateHTMLPostprocessor(BaseNodePostprocessor):
-    def _postprocess_nodes(self, nodes: List[NodeWithScore], query_bundle: Optional[any] = None) -> List[NodeWithScore]:
-        unique_nodes = []
-        seen_identifiers = set()
-
-        for node in nodes:
-            van_ban = node.metadata.get('van_ban', "")
-            muc = node.metadata.get('muc', "")
-
-            identifier = f"{van_ban}_{muc}"
-
-            if identifier not in seen_identifiers:
-                seen_identifiers.add(identifier)
-                unique_nodes.append(node)
-            else:
-                pass
-    
-        return unique_nodes
-    
 class ChiTietLoi(BaseModel):
     error_type: str = Field(..., description="Tên lỗi (VD: Sai đơn vị, Lỗi trình bày đơn vị đo, Lỗi trình bày thông số, Thông số vượt mức, Lỗi thể thức, Lỗi logic, ...)")
     reasoning: str = Field(..., description="Giải thích từng bước 1: 1. Nội dung trong tài liệu là gì vs Nội dung trong sở cứ là gì? 2. Nội dung trong tài liệu có tuân thủ theo sở cứ không? Tại sao tính là lỗi?.")

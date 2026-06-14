@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 import './DocumentPreview.css';
+import DOMPurify from 'dompurify';
 import { fetchAndSave } from '../utils/download';
 import ChatPanel from './ChatPanel';
 
@@ -53,7 +54,9 @@ function DocumentPreview({ sessionId, errors }) {
     const container = containerRef.current;
     if (html == null || !container) return;
 
-    container.innerHTML = html;
+    // Sanitize HTML từ backend (mammoth chuyển từ DOCX người dùng tải lên) trước
+    // khi gán vào DOM, tránh stored XSS từ file độc hại.
+    container.innerHTML = DOMPurify.sanitize(html);
 
     const targets = errors
       .map((e) => ({

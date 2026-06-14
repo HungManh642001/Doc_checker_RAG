@@ -1,8 +1,6 @@
-import os
 import math
 import unicodedata
 import re
-from pathlib import Path
 from typing import List, Tuple
 
 import qdrant_client
@@ -14,20 +12,12 @@ from llama_index.core import (
     Settings
 )
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.embeddings.ollama import OllamaEmbedding
-from rag.config import OLLAMA_URL, EMBEDDING_MODEL, EMBEDDING_MODEL_PATH, EMBEDDING_CACHE_FOLDER
+from rag.config import OLLAMA_URL, EMBEDDING_MODEL
 from rag.document_processing.chunker import (
     chunk_html_table, build_yckt_row_payload, build_yckt_section_payload,
     build_yckt_overview_payload, build_yckt_prose_payloads,
 )
-
-# embed_model = HuggingFaceEmbedding(
-#     model_name=EMBEDDING_MODEL_PATH,
-#     cache_folder=EMBEDDING_CACHE_FOLDER,
-#     device='cuda',
-#     trust_remote_code=True,
-# )
 
 embed_model = OllamaEmbedding(
     model_name=EMBEDDING_MODEL,
@@ -137,57 +127,6 @@ def parse_html_to_nodes_smart(html_content, ten_van_ban):
     print(f"  -> Đã bóc tách & nhúng vector thành công {len(nodes)} Node.")
     return nodes
 
-_RAG_DATA = Path(__file__).parent.parent / "data"
-
-
-def get_or_build_index(
-    data_dir: str | None = None,
-    db_path: str | None = None,
-    collection_name: str = "van_ban_so_cu",
-):
-    data_dir = data_dir or str(_RAG_DATA / "reference_html")
-    db_path = db_path or str(_RAG_DATA / "qdrant_db")
-    client = qdrant_client.QdrantClient(path=db_path)
-    vector_store = QdrantVectorStore(client=client, collection_name=collection_name)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-    try:
-        if client.collection_exists(collection_name) and client.get_collection(collection_name).vectors_count > 0:
-            print(f"Đã tải Database '{collection_name}' từ ổ cứng")
-            index = VectorStoreIndex.from_vector_store(vector_store=vector_store)
-            return index, client
-    except Exception:
-        pass
-
-    print(f"Đang tạo Database mới từ thư mục '{data_dir}'...")
-    all_nodes = []
-    for filename in os.listdir(data_dir):
-        if filename.endswith(".html"):
-            filepath = os.path.join(data_dir, filename)
-            with open(filepath, "r", encoding='utf-8') as f:
-                noi_dung_html = f.read()
-            nodes_cua_file = parse_html_to_nodes_smart(noi_dung_html, filename)
-            all_nodes.extend(nodes_cua_file)
-    
-    if not all_nodes:
-        raise ValueError("Không trích xuất được Node nào hợp lệ.")
-    
-    index = VectorStoreIndex(nodes=all_nodes, storage_context=storage_context)
-    print("Lưu Qdrant database thành công!")
-    return index, client
-
-def load_existing_index(db_path='./data/qdrant_db', collection_name="van_ban_so_cu"):
-    client = qdrant_client.QdrantClient(path=db_path)
-    vector_store = QdrantVectorStore(
-        client=client,
-        collection_name=collection_name
-    )
-
-    index = VectorStoreIndex.from_vector_store(
-        vector_store=vector_store,
-        embed_model=embed_model
-    )
-    return index, client
 
 def build_index_in_memory(
     html_docs: List[Tuple[str, str]],
@@ -398,16 +337,3 @@ def build_hybrid_retriever(
     except ImportError:
         print("[RAG] llama-index-retrievers-bm25 / rank_bm25 chưa cài — dùng vector-only.")
         return vector_retriever
-
-
-def test_retrieval(index, query_html_chunk, top_k=5):
-    retriever = index.as_retriever(similarity_top_k=top_k)
-
-    nodes = retriever.retrieve(query_html_chunk)
-    print(f"\n Tìm thấy {len(nodes)} đoạn context liên quan:")
-    print("-"*50)
-    for i, node in enumerate(nodes):
-        print(f"\n[Top {i+1}] Độ tương đồng (Score): {node.score}")
-        print(f"Tên file/metadata: {node.metadata}")
-        print(f"Nội dung nguyên bản:\n{node.text}")
-        print("-"*50)
