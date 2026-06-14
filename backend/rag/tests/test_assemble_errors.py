@@ -12,7 +12,7 @@ module nặng chỉ import lazy bên trong phương thức.
 from app.rag_analyzer import RAGAnalyzer, clean_doc_name
 
 
-# --- Đối tượng lỗi giả mô phỏng pydantic model LoiThamDinh/ChiTietLoi ---
+# --- Đối tượng lỗi giả mô phỏng pydantic model AuditError/ErrorDetail ---
 class _FakeChiTiet:
     def __init__(self, error_type, reasoning):
         self.error_type = error_type

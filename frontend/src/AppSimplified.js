@@ -11,12 +11,12 @@ const XLSX_MIME =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 /**
- * AppSimplified - Luồng thẩm định RAG đơn giản hoá
+ * AppSimplified - Simplified RAG audit flow
  *
  * Flow:
- * 1. Upload tài liệu chính + sở cứ + quy định → hệ thống thẩm định ngay
- * 2. Kết quả: xem dưới dạng "Danh sách lỗi" (báo cáo) hoặc "Xem trên tài liệu"
- *    (sửa trực tiếp & tải file đã sửa). Xuất Excel danh sách lỗi.
+ * 1. Upload the main document + reference sources + rules → the system audits immediately
+ * 2. Results: view as an "Error list" (report) or "View on document"
+ *    (edit inline & download the corrected file). Export the error list to Excel.
  */
 function App() {
   const [sessionId, setSessionId] = React.useState(null);

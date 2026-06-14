@@ -2,13 +2,14 @@ import React, { useState, useMemo } from 'react';
 import './ErrorViewer.css';
 
 /**
- * ErrorViewer — DANH SÁCH LỖI (chỉ xem / báo cáo).
+ * ErrorViewer — ERROR LIST (read-only / report).
  *
- * Việc sửa & tải tài liệu đã chuyển sang tab "Xem trên tài liệu" (DocumentPreview);
- * xuất báo cáo qua nút "Xuất Excel" trên thanh công cụ. Component này chỉ hiển thị.
+ * Editing & downloading the document has moved to the "View on document" tab
+ * (DocumentPreview); the report is exported via the "Export Excel" button on the
+ * toolbar. This component is display-only.
  *
  * Props:
- *   errors: danh sách lỗi từ backend
+ *   errors: the error list from the backend
  */
 function ErrorViewer({ errors }) {
   const [expandedErrorId, setExpandedErrorId] = useState(null);
@@ -19,7 +20,7 @@ function ErrorViewer({ errors }) {
   );
   const warnCount = errors.length - errCount;
 
-  // Thống kê theo loại lỗi để xem nhanh bức tranh tổng thể
+  // Tally by error type for a quick overview of the whole picture
   const typeCounts = useMemo(() => {
     const m = {};
     errors.forEach((e) =>

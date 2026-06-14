@@ -474,7 +474,7 @@ class RAGAnalyzer:
 
     def _assemble_warnings(self, ordered: List) -> List[Dict]:
         """
-        Gom kết quả thẩm định NỘI DUNG (KetQuaNoiDung) thành danh sách CẢNH BÁO
+        Gom kết quả thẩm định NỘI DUNG (ContentAuditResult) thành danh sách CẢNH BÁO
         (severity='warning'), cùng định dạng dict như lỗi để frontend tái dùng.
         """
         warnings: List[Dict] = []

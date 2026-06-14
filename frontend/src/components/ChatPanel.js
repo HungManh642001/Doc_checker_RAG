@@ -4,16 +4,17 @@ import remarkGfm from 'remark-gfm';
 import './ChatPanel.css';
 
 /**
- * ChatPanel — widget hỏi-đáp nổi trong DocumentPreview.
+ * ChatPanel — floating Q&A widget inside DocumentPreview.
  *
- * Mục đích: người dùng tra cứu thông tin từ các YCKT đã duyệt TRƯỚC ĐÂY (upload
- * kèm session). Câu trả lời kèm "citation chips" trỏ về nguồn (tài liệu · mục).
+ * Purpose: lets the user look up information from PREVIOUSLY approved YCKT (uploaded
+ * with the session). Answers come with "citation chips" pointing back to the source
+ * (document · section).
  *
  * Props:
- *   - sessionId: id phiên thẩm định (bắt buộc).
+ *   - sessionId: the audit session id (required).
  */
 
-// Câu hỏi gợi ý — khám phá các loại câu hỏi.
+// Suggested questions — to explore the kinds of questions available.
 const SUGGESTIONS = [
   'Liệt kê các thiết bị/vật liệu có trong các YCKT trước đây.',
   'Cho biết thông tin về "Bộ công cụ dụng cụ" trong các YCKT trước đây.',
@@ -29,7 +30,7 @@ function ChatPanel({ sessionId }) {
   const listRef = useRef(null);
   const inputRef = useRef(null);
 
-  // Tự cuộn xuống cuối khi có tin nhắn mới / mở panel
+  // Auto-scroll to the bottom on new messages / when the panel opens
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [messages, open]);

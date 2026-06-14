@@ -1,16 +1,16 @@
 """
-Trình thẩm định GIẢ LẬP (mock) — dùng khi không kết nối được LLM/embedding.
+MOCK auditor — used when the LLM/embedding service is unreachable.
 
-Mục tiêu: tạo ra kết quả lỗi *thực tế và khớp đúng nội dung tài liệu* để người
-dùng có thể thử toàn bộ UI và tính năng (highlight trên tài liệu, chấp nhận sửa
-& tải file đã sửa, xuất Excel, preset...).
+Goal: produce *realistic error results that match the actual document content* so
+the user can try out the whole UI and feature set (document highlighting, accepting
+fixes & downloading the corrected file, Excel export, presets...).
 
-Không gọi LLM, không cần embedding, không phụ thuộc llama_index. Chỉ dùng
-heuristic regex bám sát các quy tắc trong `data/rules/quy_dinh_chung.md`:
+Does not call an LLM, needs no embeddings, has no llama_index dependency. Uses only
+regex heuristics that closely follow the rules in `data/rules/quy_dinh_chung.md`:
 
-  1. Dấu thập phân phải dùng dấu phẩy (,) — không dùng dấu chấm (.)
-  2. Giữa trị số và ký hiệu đơn vị đo phải có một dấu cách (22 m, không 22m)
-  3. Không dùng ký hiệu toán học ≥, ≤, ± — thay bằng chữ
+  1. Decimal separator must be a comma (,) — not a dot (.)
+  2. There must be a space between the number and the unit symbol (22 m, not 22m)
+  3. No math symbols ≥, ≤, ± — spell them out instead
 """
 
 import re
@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup
 
 from rag.document_processing.chunker import extract_muc
 
-# Ký hiệu đơn vị đo thường gặp (đặt ký hiệu DÀI trước để regex ưu tiên khớp dài).
+# Common unit symbols (put LONGER symbols first so the regex prefers longer matches).
 _UNITS = [
     "MPa", "Mpa", "kPa", "hPa", "Pa",
     "mm²", "cm²", "m²", "mm", "cm", "dm", "km", "µm", "nm",
@@ -28,18 +28,18 @@ _UNITS = [
     "mA", "ml", "ml", "kN", "°C", "°",
     "g", "t", "l", "s", "h", "A", "V", "W", "N", "m", "%",
 ]
-# regex bộ phận đơn vị (đã escape)
+# unit alternation regex fragment (escaped)
 _UNIT_ALT = "|".join(re.escape(u) for u in _UNITS)
 
-# 1) Số thập phân dùng dấu CHẤM: "0.3", "1.5" — nhưng KHÔNG khớp số mục "1.1.3"
+# 1) Decimal number using a DOT: "0.3", "1.5" — but does NOT match section number "1.1.3"
 _RE_DOT_DECIMAL = re.compile(r"(?<![\d.])(\d+\.\d+)(?![\d.])")
 
-# 2) Trị số DÍNH liền ký hiệu đơn vị (không có dấu cách): "22m", "0,3MPa", "0.3MPa"
+# 2) Number STUCK to the unit symbol (no space): "22m", "0,3MPa", "0.3MPa"
 _RE_NUM_UNIT = re.compile(
     r"(?<![\w.,])(\d+(?:[.,]\d+)?)(" + _UNIT_ALT + r")(?![A-Za-zÀ-ỹ])"
 )
 
-# 3) Ký hiệu toán học
+# 3) Math symbols
 _MATH_REPLACE = {
     "≥": "không nhỏ hơn",
     "≤": "không lớn hơn",
@@ -52,8 +52,8 @@ _MAX_PER_CHUNK = 8
 
 def _chunk_texts(html_chunk: str) -> List[str]:
     """
-    Lấy các đoạn text 'có nghĩa' từ chunk HTML để dò lỗi.
-    Ưu tiên text trong từng ô <td>/<th>; nếu không có bảng, lấy toàn bộ text.
+    Extract the 'meaningful' text segments from an HTML chunk for error detection.
+    Prefer text inside each <td>/<th> cell; if there is no table, take all the text.
     """
     soup = BeautifulSoup(html_chunk, "html.parser")
     cells = soup.find_all(["td", "th"])
@@ -61,7 +61,7 @@ def _chunk_texts(html_chunk: str) -> List[str]:
         texts = [c.get_text(separator=" ", strip=True) for c in cells]
     else:
         texts = [soup.get_text(separator=" ", strip=True)]
-    # bỏ rỗng, gộp trùng nhưng giữ thứ tự
+    # drop empties, dedupe while preserving order
     seen = set()
     out = []
     for t in texts:
@@ -81,7 +81,7 @@ def _make_error(
     reference_quote: str,
     section: str = "",
 ) -> Dict:
-    """Dựng error dict đúng định dạng frontend mong đợi (giống _transform_error)."""
+    """Build an error dict in the format the frontend expects (like _transform_error)."""
     return {
         "id": f"error_c{chunk_idx}_{err_idx}",
         "original_text": original_text,
@@ -100,14 +100,14 @@ def _make_error(
 
 def audit_chunk(html_chunk: str, rules: str, chunk_idx: int) -> List[Dict]:
     """
-    Dò lỗi giả lập trên một chunk HTML, trả về danh sách error dict.
+    Run mock error detection on one HTML chunk, returning a list of error dicts.
 
-    Mỗi original_text là chuỗi xuất hiện NGUYÊN VĂN trong tài liệu nên highlight
-    và phép thay thế (tải file đã sửa) đều hoạt động chính xác.
+    Each original_text is a string that appears VERBATIM in the document, so both
+    highlighting and replacement (downloading the corrected file) work correctly.
     """
     errors: List[Dict] = []
-    seen = set()  # (original_text, error_type) — tránh trùng trong cùng chunk
-    section = extract_muc(html_chunk)  # đề mục/vị trí trong tài liệu
+    seen = set()  # (original_text, error_type) — avoid duplicates within the same chunk
+    section = extract_muc(html_chunk)  # heading/position within the document
 
     def add(original, etype, reasoning, suggestion, quote):
         key = (original, etype)
@@ -123,7 +123,7 @@ def audit_chunk(html_chunk: str, rules: str, chunk_idx: int) -> List[Dict]:
         if len(errors) >= _MAX_PER_CHUNK:
             break
 
-        # 2) Trị số dính đơn vị (xử lý trước để gộp cả lỗi dấu thập phân nếu có)
+        # 2) Number stuck to unit (handled first to also fold in a decimal-dot error if any)
         for m in _RE_NUM_UNIT.finditer(text):
             number, unit = m.group(1), m.group(2)
             fixed_number = number.replace(".", ",")
@@ -139,7 +139,7 @@ def audit_chunk(html_chunk: str, rules: str, chunk_idx: int) -> List[Dict]:
             if len(errors) >= _MAX_PER_CHUNK:
                 break
 
-        # 1) Số thập phân dùng dấu chấm
+        # 1) Decimal number using a dot
         for m in _RE_DOT_DECIMAL.finditer(text):
             if len(errors) >= _MAX_PER_CHUNK:
                 break
@@ -154,7 +154,7 @@ def audit_chunk(html_chunk: str, rules: str, chunk_idx: int) -> List[Dict]:
                 "dấu chấm (.).",
             )
 
-        # 3) Ký hiệu toán học
+        # 3) Math symbols
         for m in _RE_MATH.finditer(text):
             if len(errors) >= _MAX_PER_CHUNK:
                 break
@@ -172,11 +172,11 @@ def audit_chunk(html_chunk: str, rules: str, chunk_idx: int) -> List[Dict]:
 
 
 def audit_document(html_chunks: List[str], rules: str) -> List[Dict]:
-    """Dò lỗi giả lập trên toàn bộ chunk của tài liệu."""
+    """Run mock error detection across every chunk of the document."""
     all_errors: List[Dict] = []
     for idx, chunk in enumerate(html_chunks):
         all_errors.extend(audit_chunk(chunk, rules, idx))
-    # Re-index id để duy nhất toàn tài liệu
+    # Re-index id to be unique across the whole document
     for i, e in enumerate(all_errors):
         e["id"] = f"error_{i}"
     return all_errors

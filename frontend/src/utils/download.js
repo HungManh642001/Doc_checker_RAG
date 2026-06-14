@@ -1,14 +1,14 @@
 /**
- * Tiện ích tải file: ưu tiên hộp thoại "Save As" (File System Access API) để
- * người dùng tự chọn nơi lưu; nếu trình duyệt không hỗ trợ thì fallback sang
- * tải xuống thông thường.
+ * File download utilities: prefer the "Save As" dialog (File System Access API) so the
+ * user can choose where to save; fall back to a regular download if the browser does
+ * not support it.
  */
 
 /**
- * Lưu một Blob ra file. Trả về true nếu đã lưu, false nếu người dùng huỷ.
+ * Save a Blob to a file. Returns true if saved, false if the user cancels.
  */
 export async function saveBlob(blob, suggestedName, mimeType) {
-  // Chromium: cho người dùng chọn vị trí lưu
+  // Chromium: let the user choose the save location
   if (typeof window !== 'undefined' && window.showSaveFilePicker) {
     try {
       const ext = (suggestedName.split('.').pop() || '').toLowerCase();
@@ -23,12 +23,12 @@ export async function saveBlob(blob, suggestedName, mimeType) {
       await writable.close();
       return true;
     } catch (err) {
-      if (err && err.name === 'AbortError') return false; // người dùng huỷ
-      // các lỗi khác → fallback tải thường
+      if (err && err.name === 'AbortError') return false; // user cancelled
+      // other errors → fall back to a regular download
     }
   }
 
-  // Fallback: thẻ <a download> (trình duyệt tự lưu vào thư mục Downloads)
+  // Fallback: an <a download> element (the browser saves into the Downloads folder)
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -41,7 +41,7 @@ export async function saveBlob(blob, suggestedName, mimeType) {
 }
 
 /**
- * GET một URL và lưu kết quả ra file (qua saveBlob). Ném lỗi nếu response không OK.
+ * GET a URL and save the result to a file (via saveBlob). Throws if the response is not OK.
  */
 export async function fetchAndSave(url, suggestedName, mimeType, fetchOptions) {
   const res = await fetch(url, fetchOptions);
@@ -51,7 +51,7 @@ export async function fetchAndSave(url, suggestedName, mimeType, fetchOptions) {
       const data = await res.json();
       msg = data.error || msg;
     } catch (e) {
-      /* response không phải JSON */
+      /* response is not JSON */
     }
     throw new Error(msg);
   }

@@ -9,7 +9,7 @@ from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import QueryBundle, NodeWithScore
 from llama_index.core.query_engine import RetrieverQueryEngine
 
-from rag.audit_logic.audit_models import KetQuaThamDinh
+from rag.audit_logic.audit_models import AuditResult
 
 
 # ---------------------------------------------------------------------------
@@ -36,17 +36,17 @@ def _html_to_query_text(html_chunk: str) -> str:
     """
     parts: List[str] = []
 
-    # Section context từ comment <!-- Mục: ... -->
+    # Section context from the <!-- Mục: ... --> comment
     m = re.search(r'<!-- Mục:\s*(.+?)\s*-->', html_chunk)
     if m:
         parts.append(f"Mục: {m.group(1)}")
 
     soup = BeautifulSoup(html_chunk, 'html.parser')
 
-    # Lấy dòng dữ liệu (không có <th>) — chỉ lấy 3 cột đầu
+    # Take data rows (without <th>) — only the first 3 columns
     for row in soup.find_all('tr'):
         if row.find('th'):
-            continue  # bỏ header rows
+            continue  # skip header rows
         cells = row.find_all('td', recursive=False)
         cell_texts = [
             c.get_text(separator=' ', strip=True)
@@ -78,9 +78,9 @@ class QueryTransformRetriever(BaseRetriever):
 
     def __init__(self, inner: BaseRetriever, retrieve_lock=None) -> None:
         self._inner = inner
-        # Khóa tuỳ chọn để tuần tự hoá phần truy hồi khi chạy đa luồng
-        # (Qdrant in-memory client không đảm bảo thread-safe). Phần sinh LLM
-        # sau bước retrieve vẫn chạy song song giữa các luồng.
+        # Optional lock to serialize retrieval when running multi-threaded
+        # (the Qdrant in-memory client is not guaranteed thread-safe). LLM
+        # generation after the retrieve step still runs in parallel across threads.
         self._retrieve_lock = retrieve_lock
         super().__init__()
 
@@ -98,24 +98,24 @@ class QueryTransformRetriever(BaseRetriever):
 
 def run_audit(
     index,
-    noi_dung_tai_lieu_dau_vao: str,
+    document_chunk: str,
     rules: str,
     top_k: int,
     retriever: Optional[BaseRetriever] = None,
     retrieve_lock=None,
-) -> KetQuaThamDinh:
+) -> AuditResult:
     """
-    Thẩm định một chunk HTML và trả về kết quả có cấu trúc KetQuaThamDinh.
+    Thẩm định một chunk HTML và trả về kết quả có cấu trúc AuditResult.
 
     Luồng xử lý:
     1. QueryTransformRetriever chuyển HTML chunk → plain text query
     2. inner retriever (hybrid BM25+vector hoặc vector-only) tìm nodes sở cứ
     3. RetrieverQueryEngine điền nodes vào {context_str}, chunk HTML vào {query_str}
-    4. LLM sinh JSON → parse thành KetQuaThamDinh
+    4. LLM sinh JSON → parse thành AuditResult
 
     Args:
         index: VectorStoreIndex — dùng làm fallback khi retriever=None
-        noi_dung_tai_lieu_dau_vao: HTML chunk cần thẩm định (giữ cấu trúc bảng)
+        document_chunk: HTML chunk cần thẩm định (giữ cấu trúc bảng)
         rules: quy định chung (inject vào system prompt)
         top_k: số node sở cứ lấy ra
         retriever: pre-built hybrid retriever (tốt nhất là xây một lần, tái dùng).
@@ -152,21 +152,21 @@ def run_audit(
         ChatMessage(role=MessageRole.USER, content=user_content),
     ])
 
-    # Chọn inner retriever
+    # Select the inner retriever
     base_retriever = retriever if retriever is not None else index.as_retriever(
         similarity_top_k=top_k
     )
 
-    # Wrap: HTML query → plain text trước khi retrieve
+    # Wrap: HTML query → plain text before retrieving
     wrapped = QueryTransformRetriever(base_retriever, retrieve_lock=retrieve_lock)
 
     query_engine = RetrieverQueryEngine.from_args(
         retriever=wrapped,
-        output_cls=KetQuaThamDinh,
+        output_cls=AuditResult,
         text_qa_template=chat_qa_template,
-        node_postprocessors=[],   # bỏ DeduplicateHTMLPostprocessor: có thể drop context hợp lệ
+        node_postprocessors=[],   # drop DeduplicateHTMLPostprocessor: may discard valid context
     )
 
     print("Đang tiến hành đối chiếu và thẩm định bằng Qwen (Vui lòng đợi)...")
-    response = query_engine.query(noi_dung_tai_lieu_dau_vao)
+    response = query_engine.query(document_chunk)
     return response

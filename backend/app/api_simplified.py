@@ -18,28 +18,28 @@ api_bp = Blueprint('api', __name__, url_prefix='/api')
 # Store session metadata
 _sessions = {}
 
-# Định dạng cho tài liệu cần thẩm định & sở cứ (xây dựng tri thức)
+# Allowed formats for the document under review & reference sources (knowledge base)
 ALLOWED_EXTENSIONS = {'docx', 'doc', 'pdf', 'html'}
-# Định dạng cho file quy định (rules) — cho phép markdown/text/word
+# Allowed formats for rule files — markdown/text/word permitted
 ALLOWED_RULE_EXTENSIONS = {'md', 'txt', 'docx', 'doc'}
 
 # ---------------------------------------------------------------------------
-# Thư viện preset (bộ sở cứ / quy định lưu sẵn để tái dùng)
+# Preset library (saved reference / rule sets for reuse)
 # ---------------------------------------------------------------------------
 _RAG_DATA_DIR = Path(__file__).parent.parent / 'rag' / 'data'
 REFERENCE_PRESET_DIR = _RAG_DATA_DIR / 'reference_documents'
 RULES_PRESET_DIR = _RAG_DATA_DIR / 'rules'
-# Không cho xoá các preset mặc định đi kèm hệ thống
+# Default presets bundled with the system cannot be deleted
 _PROTECTED_PRESETS = {'quy_dinh_chung.md', '86nd.docx'}
 
 
 def _preset_dir(kind: str) -> Path:
-    """Trả về thư mục preset theo loại ('reference' | 'rule')."""
+    """Return the preset directory for the given kind ('reference' | 'rule')."""
     return REFERENCE_PRESET_DIR if kind == 'reference' else RULES_PRESET_DIR
 
 
 def _list_presets(kind: str, allowed_ext: set) -> list:
-    """Liệt kê các file preset hợp lệ trong thư viện."""
+    """List the valid preset files in the library."""
     d = _preset_dir(kind)
     if not d.exists():
         return []
@@ -56,8 +56,8 @@ def _list_presets(kind: str, allowed_ext: set) -> list:
 
 def _save_paths_as_presets(saved_paths: list, target_dir: Path) -> None:
     """
-    Copy các file đã upload (đường dẫn trong upload_dir) vào thư viện preset.
-    Bỏ tiền tố 'ref_N_' / 'rule_N_' để khôi phục tên gốc.
+    Copy the uploaded files (paths inside upload_dir) into the preset library.
+    Strip the 'ref_N_' / 'rule_N_' prefix to restore the original name.
     """
     import re
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -75,13 +75,13 @@ def _save_paths_as_presets(saved_paths: list, target_dir: Path) -> None:
 
 def _resolve_preset_paths(kind: str, names: list, allowed_ext: set) -> list:
     """
-    Chuyển danh sách tên preset → đường dẫn tuyệt đối (an toàn, chống path traversal).
-    Bỏ qua tên không hợp lệ / không tồn tại.
+    Convert a list of preset names → absolute paths (safe, guards against path traversal).
+    Skip invalid / non-existent names.
     """
     d = _preset_dir(kind)
     paths = []
     for raw in names:
-        name = os.path.basename((raw or '').strip())  # chặn '../'
+        name = os.path.basename((raw or '').strip())  # block '../'
         if not name or _ext(name) not in allowed_ext:
             continue
         candidate = d / name
@@ -124,11 +124,11 @@ def upload_and_analyze():
             return jsonify({'error': 'Main document must be .docx format'}), 400
         
         # Get reference and rule documents
-        #   - referenceDocuments: sở cứ → dựng RAG index (cơ sở tri thức)
-        #   - ruleDocuments: quy định → inject vào prompt thẩm định (KHÔNG index)
+        #   - referenceDocuments: reference sources → build the RAG index (knowledge base)
+        #   - ruleDocuments: rules → inject into the audit prompt (NOT indexed)
         reference_docs = request.files.getlist('referenceDocuments')
         rule_docs = request.files.getlist('ruleDocuments')
-        # historyDocuments: YCKT đã duyệt trước đây → kho tra cứu cho chatbot hỏi-đáp
+        # historyDocuments: previously approved YCKT → lookup store for the Q&A chatbot
         history_docs = request.files.getlist('historyDocuments')
 
         # Create session directory
@@ -145,7 +145,7 @@ def upload_and_analyze():
             main_doc.save(main_path)
             print(f"[API] Saved main document: {main_filename}")
             
-            # Save reference documents (sở cứ → RAG index)
+            # Save reference documents (reference sources → RAG index)
             ref_paths = []
             for ref_doc in reference_docs:
                 if ref_doc and ref_doc.filename and allowed_file(ref_doc.filename):
@@ -155,7 +155,7 @@ def upload_and_analyze():
                     ref_paths.append(ref_path)
                     print(f"[API] Saved reference: {ref_filename}")
 
-            # Save rule documents (quy định → prompt thẩm định)
+            # Save rule documents (rules → audit prompt)
             rule_paths = []
             for rule_doc in rule_docs:
                 if rule_doc and rule_doc.filename and allowed_rule_file(rule_doc.filename):
@@ -165,9 +165,10 @@ def upload_and_analyze():
                     rule_paths.append(rule_path)
                     print(f"[API] Saved rule: {rule_filename}")
 
-            # Save history documents (YCKT cũ → kho tra cứu cho chatbot)
-            # Giữ TÊN GỐC (history_names) để hiển thị/viện dẫn — tên file lưu đã bị
-            # secure_filename làm mất dấu tiếng Việt + thêm tiền tố hist_N_.
+            # Save history documents (old YCKT → lookup store for the chatbot)
+            # Keep the ORIGINAL NAME (history_names) for display/citation — the saved
+            # filename has lost its Vietnamese diacritics via secure_filename and gained
+            # a hist_N_ prefix.
             history_paths = []
             history_names = {}
             for hist_doc in history_docs:
@@ -178,15 +179,15 @@ def upload_and_analyze():
                     )
                     hist_doc.save(hist_path)
                     history_paths.append(hist_path)
-                    history_names[hist_path] = hist_doc.filename  # tên gốc người dùng
+                    history_names[hist_path] = hist_doc.filename  # user's original name
                     print(f"[API] Saved history YCKT: {hist_doc.filename}")
 
-            # --- Lưu các file VỪA UPLOAD thành preset (trước khi trộn preset cũ) ---
+            # --- Save the JUST-UPLOADED files as presets (before merging existing presets) ---
             if request.form.get('savePresets', '').lower() == 'true':
                 _save_paths_as_presets(ref_paths, REFERENCE_PRESET_DIR)
                 _save_paths_as_presets(rule_paths, RULES_PRESET_DIR)
 
-            # --- Preset đã chọn từ thư viện (tái dùng, không cần upload lại) ---
+            # --- Presets selected from the library (reused, no need to re-upload) ---
             ref_presets = request.form.getlist('referencePresets')
             rule_presets = request.form.getlist('rulePresets')
             ref_paths += _resolve_preset_paths('reference', ref_presets, ALLOWED_EXTENSIONS)
@@ -194,9 +195,9 @@ def upload_and_analyze():
             if ref_presets or rule_presets:
                 print(f"[API] Dùng preset: {len(ref_presets)} sở cứ, {len(rule_presets)} quy định")
 
-            # Tạo analyzer riêng cho session này.
-            # Sở cứ rỗng → analyzer tự fallback sang sở cứ mặc định (NĐ 86).
-            # Quy định rỗng → analyzer tự fallback sang quy_dinh_chung.md.
+            # Create a dedicated analyzer for this session.
+            # Empty reference sources → analyzer falls back to the default source (NĐ 86).
+            # Empty rules → analyzer falls back to quy_dinh_chung.md.
             print("[API] Đang dựng index từ sở cứ...")
             analyzer = make_analyzer()
 
@@ -211,14 +212,14 @@ def upload_and_analyze():
             print("[API] Running document analysis...")
             errors = analyzer.analyze_document(main_path)
 
-            # Chuyển tài liệu chính sang HTML để hiển thị preview (không chặn nếu lỗi)
+            # Convert the main document to HTML for the preview (non-blocking on error)
             try:
                 main_html = docx_to_html(main_path)
             except Exception as e:  # noqa: BLE001
                 print(f"[API] Không tạo được HTML preview: {e}")
                 main_html = ""
 
-            # Lưu session, kèm analyzer để cleanup sau
+            # Store the session, including the analyzer for later cleanup
             _sessions[session_id] = {
                 'main_path': main_path,
                 'main_html': main_html,
@@ -277,7 +278,7 @@ def get_session_results(session_id):
 @api_bp.route('/session/<session_id>/apply-suggestions', methods=['POST'])
 def apply_suggestions(session_id):
     """
-    Áp dụng các gợi ý được chấp nhận vào tài liệu và xuất file DOCX đã sửa.
+    Apply the accepted suggestions to the document and export the corrected DOCX file.
 
     Expected JSON:
     {
@@ -285,7 +286,7 @@ def apply_suggestions(session_id):
             {
                 "errorId": "error_c0_1",
                 "action": "accept" | "reject" | "custom",
-                "fixedValue": "..."   // tuỳ chọn: giá trị người dùng tự nhập
+                "fixedValue": "..."   // optional: value entered manually by the user
             }
         ]
     }
@@ -309,7 +310,7 @@ def apply_suggestions(session_id):
         errors_by_id = {e['id']: e for e in session.get('errors', [])}
         updates = data['updates']
 
-        # Xây danh sách thay thế text cho các lỗi được chấp nhận
+        # Build the list of text replacements for the accepted errors
         text_corrections = []
         for update in updates:
             if update.get('action') == 'reject':
@@ -323,7 +324,7 @@ def apply_suggestions(session_id):
             if not original_text:
                 continue
 
-            # Ưu tiên: giá trị người dùng nhập tay > suggestion của AI
+            # Priority: user's manually entered value > AI suggestion
             new_text = (
                 update.get('fixedValue')
                 or update.get('customSuggestion')
@@ -343,7 +344,7 @@ def apply_suggestions(session_id):
                 'message': 'Không có sửa lỗi nào được chấp nhận.',
             }), 200
 
-        # Áp dụng vào file DOCX
+        # Apply to the DOCX file
         main_path = session['main_path']
         base_name = os.path.splitext(os.path.basename(main_path))[0]
         corrected_path = os.path.join(session['upload_dir'], f'{base_name}_corrected.docx')
@@ -369,7 +370,7 @@ def apply_suggestions(session_id):
 
 @api_bp.route('/session/<session_id>/download', methods=['GET'])
 def download_corrected(session_id):
-    """Tải về file DOCX đã được sửa lỗi."""
+    """Download the corrected DOCX file."""
     if session_id not in _sessions:
         return jsonify({'error': 'Session not found'}), 404
 
@@ -388,15 +389,16 @@ def download_corrected(session_id):
 @api_bp.route('/session/<session_id>/chat', methods=['POST'])
 def chat(session_id):
     """
-    Hỏi-đáp với chatbot trong DocumentPreview.
+    Q&A with the chatbot inside DocumentPreview.
 
-    Chatbot tra cứu thông tin các YCKT đã duyệt TRƯỚC ĐÂY và có thể đối chiếu với
-    TÀI LIỆU ĐANG THẨM ĐỊNH (cả hai nguồn đều khả dụng; LLM tự chọn theo câu hỏi).
+    The chatbot looks up information from PREVIOUSLY approved YCKT and can compare it
+    with the DOCUMENT UNDER REVIEW (both sources are available; the LLM picks based on
+    the question).
 
     Expected JSON:
     {
         "question": "So sánh van xả áp tài liệu này với YCKT trước đây",
-        "history": [{"role": "user"|"assistant", "content": "..."}]   // tuỳ chọn
+        "history": [{"role": "user"|"assistant", "content": "..."}]   // optional
     }
 
     Response:
@@ -423,8 +425,8 @@ def chat(session_id):
         return jsonify({'error': 'Session chưa sẵn sàng (thiếu analyzer)'}), 409
 
     try:
-        # Cả hai nguồn (YCKT trước đây + tài liệu đang xét) đều khả dụng để chatbot
-        # tra cứu hoặc đối chiếu tuỳ câu hỏi.
+        # Both sources (previous YCKT + the document under review) are available for the
+        # chatbot to look up or cross-check depending on the question.
         result = analyzer.answer_question(question, history=history)
         return jsonify({'success': True, **result}), 200
     except Exception as e:
@@ -442,12 +444,12 @@ def cleanup_session(session_id):
     if session_id in _sessions:
         session = _sessions.pop(session_id)
 
-        # Đóng Qdrant client của session này
+        # Close this session's Qdrant client
         analyzer = session.get('analyzer')
         if analyzer:
             analyzer.cleanup()
 
-        # Xoá thư mục upload
+        # Remove the upload directory
         import shutil
         if os.path.exists(session['upload_dir']):
             try:
@@ -462,8 +464,8 @@ def cleanup_session(session_id):
 @api_bp.route('/rules/default', methods=['GET'])
 def get_default_rules():
     """
-    Trả về nội dung quy định mặc định (quy_dinh_chung.md) để hiển thị/tham khảo
-    trên giao diện. Người dùng có thể xem trước trước khi quyết định upload đè.
+    Return the default rules content (quy_dinh_chung.md) for display/reference in the
+    UI. The user can preview it before deciding whether to upload an override.
     """
     try:
         from rag.knowledge_base.rules import load_rules
@@ -478,8 +480,8 @@ def get_default_rules():
 @api_bp.route('/session/<session_id>/document', methods=['GET'])
 def get_document_html(session_id):
     """
-    Trả về HTML của tài liệu chính + danh sách lỗi, để frontend hiển thị
-    preview và highlight các đoạn nội dung sai (theo original_text).
+    Return the main document's HTML + the error list, so the frontend can render the
+    preview and highlight the incorrect passages (matched by original_text).
     """
     if session_id not in _sessions:
         return jsonify({'error': 'Session not found'}), 404
@@ -493,7 +495,7 @@ def get_document_html(session_id):
 
 @api_bp.route('/presets', methods=['GET'])
 def list_presets():
-    """Liệt kê thư viện sở cứ & quy định lưu sẵn để tái dùng."""
+    """List the saved reference-source & rule libraries available for reuse."""
     return jsonify({
         'success': True,
         'references': _list_presets('reference', ALLOWED_EXTENSIONS),
@@ -503,7 +505,7 @@ def list_presets():
 
 @api_bp.route('/presets/<kind>/<path:name>', methods=['DELETE'])
 def delete_preset(kind, name):
-    """Xoá một preset khỏi thư viện (không cho xoá preset mặc định)."""
+    """Delete a preset from the library (default presets cannot be deleted)."""
     if kind not in ('reference', 'rule'):
         return jsonify({'error': 'kind phải là reference hoặc rule'}), 400
 
@@ -523,7 +525,7 @@ def delete_preset(kind, name):
 
 @api_bp.route('/session/<session_id>/report.xlsx', methods=['GET'])
 def export_report_excel(session_id):
-    """Xuất báo cáo danh sách lỗi ra file Excel (.xlsx)."""
+    """Export the error-list report to an Excel file (.xlsx)."""
     if session_id not in _sessions:
         return jsonify({'error': 'Session not found'}), 404
 
@@ -547,11 +549,11 @@ def export_report_excel(session_id):
 
 def _build_excel_report(errors: list, doc_name: str) -> bytes:
     """
-    Dựng workbook báo cáo lỗi → bytes.
+    Build the error-report workbook → bytes.
 
-    Các lỗi được NHÓM theo "Mục" (đề mục/vị trí trong tài liệu thẩm định); mỗi nhóm
-    có một dòng tiêu đề để người đọc dễ theo dõi lỗi nằm ở phần nào của tài liệu.
-    Mỗi loại lỗi con là một dòng.
+    Errors are GROUPED by "section" (heading/position within the audited document); each
+    group has a header row so the reader can easily tell which part of the document an
+    error belongs to. Each sub-error type is one row.
     """
     from collections import OrderedDict
     from openpyxl import Workbook
@@ -568,7 +570,7 @@ def _build_excel_report(errors: list, doc_name: str) -> bytes:
     widths = [6, 40, 22, 50, 35, 24, 40]
     ncol = len(headers)
 
-    # Tiêu đề tài liệu
+    # Document title
     ws.append([f'BÁO CÁO THẨM ĐỊNH: {doc_name}'])
     ws.append([f'Tổng số mục lỗi: {len(errors)}'])
     ws.append([])
@@ -592,7 +594,7 @@ def _build_excel_report(errors: list, doc_name: str) -> bytes:
         c.alignment = Alignment(horizontal='center', vertical='center')
         c.border = border
 
-    # Nhóm lỗi theo "Mục" (giữ thứ tự xuất hiện trong tài liệu)
+    # Group errors by "section" (preserving their order of appearance in the document)
     groups = OrderedDict()
     for err in errors:
         sec = (err.get('section') or '').strip() or '(Không xác định mục)'
@@ -600,7 +602,7 @@ def _build_excel_report(errors: list, doc_name: str) -> bytes:
 
     stt = 0
     for section, errs in groups.items():
-        # Dòng tiêu đề đề mục (gộp ô toàn bộ chiều ngang)
+        # Section header row (merged across the full width)
         sec_row = ws.max_row + 1
         ws.cell(row=sec_row, column=1, value=f'📂 Mục: {section}')
         ws.merge_cells(start_row=sec_row, start_column=1, end_row=sec_row, end_column=ncol)

@@ -14,11 +14,11 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
   const [mainDocument, setMainDocument] = React.useState(null);
   const [referenceDocuments, setReferenceDocuments] = React.useState([]);
   const [ruleDocuments, setRuleDocuments] = React.useState([]);
-  // YCKT đã duyệt trước đây → kho tra cứu cho chatbot hỏi-đáp
+  // Previously approved YCKT → lookup store for the Q&A chatbot
   const [historyDocuments, setHistoryDocuments] = React.useState([]);
   const [defaultRules, setDefaultRules] = React.useState(null);
   const [showDefaultRules, setShowDefaultRules] = React.useState(false);
-  // Thư viện preset lưu sẵn + lựa chọn của người dùng
+  // Saved preset library + the user's selection
   const [presets, setPresets] = React.useState({ references: [], rules: [] });
   const [selectedRefPresets, setSelectedRefPresets] = React.useState([]);
   const [selectedRulePresets, setSelectedRulePresets] = React.useState([]);
@@ -161,16 +161,16 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
       formData.append('ruleDocuments', doc);
     });
 
-    // Add history documents (YCKT cũ → kho tra cứu cho chatbot)
+    // Add history documents (old YCKT → lookup store for the chatbot)
     historyDocuments.forEach(doc => {
       formData.append('historyDocuments', doc);
     });
 
-    // Add selected presets (tái dùng từ thư viện)
+    // Add selected presets (reused from the library)
     selectedRefPresets.forEach((name) => formData.append('referencePresets', name));
     selectedRulePresets.forEach((name) => formData.append('rulePresets', name));
 
-    // Lưu file vừa tải lên thành preset
+    // Save the just-uploaded files as presets
     if (savePresets) {
       formData.append('savePresets', 'true');
     }
@@ -417,7 +417,7 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
           )}
         </div>
 
-        {/* History Documents (YCKT cũ → chatbot hỏi-đáp) */}
+        {/* History Documents (old YCKT → Q&A chatbot) */}
         <div className="upload-section">
           <h2 className="section-title">
             🗂️ YCKT Tham Khảo Trước Đây <span className="optional">(Tùy chọn)</span>
@@ -465,7 +465,7 @@ function DocumentUploadSimplified({ onUploadComplete, loading, setLoading }) {
           )}
         </div>
 
-        {/* Lưu thành preset */}
+        {/* Save as preset */}
         {(referenceDocuments.length > 0 || ruleDocuments.length > 0) && (
           <label className="save-preset-toggle">
             <input

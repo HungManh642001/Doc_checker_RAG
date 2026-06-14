@@ -5,7 +5,7 @@ _DEFAULT_RULES = Path(__file__).parent.parent / "data" / "rules" / "quy_dinh_chu
 
 
 def load_rules(filepath: str | None = None) -> str:
-    """Nạp quy định mặc định (hoặc từ 1 đường dẫn cụ thể)."""
+    """Load the default rules (or from a specific path)."""
     path = Path(filepath) if filepath else _DEFAULT_RULES
     if path.exists():
         return path.read_text(encoding="utf-8")
@@ -15,10 +15,11 @@ def load_rules(filepath: str | None = None) -> str:
 
 def _read_rule_file(path: Path) -> str:
     """
-    Đọc nội dung 1 file quy định và trả về plain text / markdown.
+    Read the content of one rules file and return plain text / markdown.
 
-    Hỗ trợ: .md, .txt (đọc thẳng) và .docx/.doc (chuyển sang markdown qua mammoth
-    để giữ cấu trúc heading + danh sách — quan trọng vì quy định thường đánh số).
+    Supports: .md, .txt (read directly) and .docx/.doc (converted to markdown via
+    mammoth to preserve heading + list structure — important because rules are
+    usually numbered).
     """
     suffix = path.suffix.lower()
     if suffix in (".md", ".txt"):
@@ -37,16 +38,16 @@ def _read_rule_file(path: Path) -> str:
 
 def load_rules_from_files(paths: Optional[List[str]]) -> str:
     """
-    Nạp quy định từ các file người dùng upload.
+    Load rules from user-uploaded files.
 
-    - Mỗi file được gắn tiêu đề '# Nguồn: <tên file>' để LLM phân biệt nguồn.
-    - Nếu không truyền file nào, hoặc không có file hợp lệ → fallback quy định mặc định.
+    - Each file gets a '# Nguồn: <file name>' heading so the LLM can distinguish sources.
+    - If no files are passed, or no file is valid → fall back to the default rules.
 
     Args:
-        paths: danh sách đường dẫn file quy định (.md/.txt/.docx). Có thể None.
+        paths: list of rules-file paths (.md/.txt/.docx). May be None.
 
     Returns:
-        Chuỗi quy định gộp, sẵn sàng inject vào system prompt.
+        The merged rules string, ready to inject into the system prompt.
     """
     if not paths:
         return load_rules()

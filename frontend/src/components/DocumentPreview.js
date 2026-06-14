@@ -9,11 +9,11 @@ const DOCX_MIME =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 /**
- * DocumentPreview — hiển thị tài liệu gốc (HTML) + HIGHLIGHT nội dung lỗi
- * (khớp theo original_text). Người dùng có thể:
- *   - Bấm vùng tô màu để xem chi tiết lỗi
- *   - Sửa nội dung đề xuất rồi "Chấp nhận & cập nhật" → cập nhật NGAY trong văn bản
- *   - Tải tài liệu đã sửa (chọn nơi lưu)
+ * DocumentPreview — renders the original document (HTML) + HIGHLIGHTS the error content
+ * (matched by original_text). The user can:
+ *   - Click a highlighted region to view the error details
+ *   - Edit the suggested text then "Accept & update" → updates the text IMMEDIATELY
+ *   - Download the corrected document (choose where to save)
  *
  * Props: sessionId, errors
  */
@@ -26,7 +26,7 @@ function DocumentPreview({ sessionId, errors }) {
   const [downloading, setDownloading] = useState(false);
   const containerRef = useRef(null);
 
-  // Tải HTML tài liệu
+  // Load the document HTML
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -49,13 +49,13 @@ function DocumentPreview({ sessionId, errors }) {
     };
   }, [sessionId]);
 
-  // Render HTML + highlight (chạy 1 lần khi có html). Lưu nguyên văn vào data-original.
+  // Render HTML + highlight (runs once when html is available). Store the verbatim text in data-original.
   useEffect(() => {
     const container = containerRef.current;
     if (html == null || !container) return;
 
-    // Sanitize HTML từ backend (mammoth chuyển từ DOCX người dùng tải lên) trước
-    // khi gán vào DOM, tránh stored XSS từ file độc hại.
+    // Sanitize the HTML from the backend (mammoth-converted from the user-uploaded DOCX)
+    // before injecting it into the DOM, to prevent stored XSS from a malicious file.
     container.innerHTML = DOMPurify.sanitize(html);
 
     const targets = errors
@@ -110,7 +110,7 @@ function DocumentPreview({ sessionId, errors }) {
       return;
     }
     setAccepted((prev) => ({ ...prev, [selected.id]: value }));
-    updateMarks(selected.id, value, true); // cập nhật ngay trong văn bản
+    updateMarks(selected.id, value, true); // update immediately in the text
     toast.success('✓ Đã cập nhật trong văn bản', { autoClose: 1500 });
   };
 
@@ -228,8 +228,8 @@ function DocumentPreview({ sessionId, errors }) {
               ))}
             </div>
 
-            {/* Cảnh báo nội dung: chỉ tham khảo, KHÔNG sửa tự động. Lỗi hình thức:
-                có thẻ đề xuất sửa & áp dụng vào văn bản. */}
+            {/* Content warning: reference only, NO automatic fix. Formatting error:
+                has a suggestion card to fix & apply to the text. */}
             {!isWarning && (
               <div className="dp-suggest-card">
                 <div className="dp-suggest-head">💡 Đề xuất sửa</div>
@@ -315,7 +315,7 @@ function highlightInNode(root, target) {
     const mark = document.createElement('mark');
     mark.className = `err-mark sev-${target.severity}`;
     mark.setAttribute('data-eid', target.id);
-    mark.setAttribute('data-original', after.nodeValue); // lưu để hoàn tác
+    mark.setAttribute('data-original', after.nodeValue); // store for undo
     mark.textContent = after.nodeValue;
     after.parentNode.replaceChild(mark, after);
   });

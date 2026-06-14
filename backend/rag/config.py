@@ -1,10 +1,10 @@
 """
-Cấu hình RAG — đọc từ backend/.env, có giá trị mặc định an toàn.
+RAG configuration — loaded from backend/.env with safe defaults.
 
-Kiến trúc LLM:
-- LLM sinh kết quả thẩm định: LiteLLM proxy (qwen3-27b trên vLLM) — mặc định.
-  Có thể chuyển về Ollama local qua biến LLM_PROVIDER trong .env.
-- Embeddings: LUÔN chạy trên Ollama local (nomic-embed-text), không qua LiteLLM.
+LLM architecture:
+- Audit-result LLM: LiteLLM proxy (qwen3-27b on vLLM) — default.
+  Can be switched back to local Ollama via the LLM_PROVIDER variable in .env.
+- Embeddings: ALWAYS run on local Ollama (nomic-embed-text), never via LiteLLM.
 """
 
 import os
@@ -12,7 +12,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# backend/.env (config.py ở backend/rag/config.py → lùi 2 cấp tới backend/)
+# backend/.env (config.py lives at backend/rag/config.py → go up 2 levels to backend/)
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 
@@ -23,32 +23,32 @@ def _get(name: str, default: str) -> str:
 # ---------------------------------------------------------------------------
 # Provider switch
 # ---------------------------------------------------------------------------
-# "litellm" → dùng LiteLLM proxy (vLLM qwen3-27b)
-# "ollama"  → dùng Ollama local (dev offline / fallback)
+# "litellm" → use LiteLLM proxy (vLLM qwen3-27b)
+# "ollama"  → use local Ollama (offline dev / fallback)
 LLM_PROVIDER = _get("LLM_PROVIDER", "litellm").strip().lower()
 
 # ---------------------------------------------------------------------------
-# MOCK MODE — giả lập kết quả thẩm định khi KHÔNG kết nối được LLM/embedding.
-# Bật để dùng thử UI & toàn bộ tính năng (highlight, sửa file, Excel, preset)
-# mà không cần LiteLLM proxy hay Ollama. Khi bật, hệ thống KHÔNG import/khởi tạo
-# llama_index — chỉ dùng heuristic bắt lỗi theo quy_dinh_chung.md.
+# MOCK MODE — simulate audit results when the LLM/embedding cannot be reached.
+# Enable it to try out the UI & all features (highlight, file editing, Excel, presets)
+# without needing the LiteLLM proxy or Ollama. When enabled the system does NOT
+# import/initialize llama_index — it only uses heuristic checks based on quy_dinh_chung.md.
 # ---------------------------------------------------------------------------
 MOCK_MODE = _get("MOCK_MODE", "false").strip().lower() == "true"
 
 # ---------------------------------------------------------------------------
-# LiteLLM proxy (OpenAI-compatible, qwen3-27b trên vLLM)
+# LiteLLM proxy (OpenAI-compatible, qwen3-27b on vLLM)
 # ---------------------------------------------------------------------------
-# Lưu ý: api_base PHẢI có hậu tố /v1 (route OpenAI của LiteLLM proxy).
+# Note: api_base MUST have the /v1 suffix (the LiteLLM proxy's OpenAI route).
 LITELLM_BASE_URL = _get("LITELLM_BASE_URL", "http://localhost:4000/v1")
 LITELLM_API_KEY = _get("LITELLM_API_KEY", "sk-no-key")
 LITELLM_MODEL = _get("LITELLM_MODEL", "qwen3-27b")
-# Tắt chế độ "thinking" của qwen3 trên vLLM (true/false)
+# Disable qwen3 "thinking" mode on vLLM (true/false)
 LITELLM_DISABLE_THINKING = _get("LITELLM_DISABLE_THINKING", "true").strip().lower() == "true"
-# Context window thật của model trên vLLM (qwen3-27b native = 32768).
-# QUAN TRỌNG: phải khớp --max-model-len của vLLM, nếu không LlamaIndex tính sai
-# ngân sách prompt → lỗi "Calculated available context size ... not non-negative".
+# The model's real context window on vLLM (qwen3-27b native = 32768).
+# IMPORTANT: must match vLLM's --max-model-len, otherwise LlamaIndex miscomputes the
+# prompt budget → "Calculated available context size ... not non-negative" error.
 LITELLM_CONTEXT_WINDOW = int(_get("LITELLM_CONTEXT_WINDOW", "32768"))
-# Max output tokens. Phải NHỎ hơn context window nhiều (output thẩm định mỗi chunk ngắn).
+# Max output tokens. Must be MUCH smaller than the context window (per-chunk audit output is short).
 LITELLM_MAX_TOKENS = int(_get("LITELLM_MAX_TOKENS", "2048"))
 
 # ---------------------------------------------------------------------------
@@ -57,13 +57,13 @@ LITELLM_MAX_TOKENS = int(_get("LITELLM_MAX_TOKENS", "2048"))
 OLLAMA_URL = _get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = _get("OLLAMA_MODEL", "qwen3:4b")
 
-# Embeddings luôn trên Ollama local
+# Embeddings always run on local Ollama
 EMBEDDING_MODEL = _get("EMBEDDING_MODEL", "nomic-embed-text")
 
-# Backward-compat: code cũ import MODEL (LLM Ollama)
+# Backward-compat: legacy code imports MODEL (Ollama LLM)
 MODEL = OLLAMA_MODEL
 
-# HuggingFace embedding (tuỳ chọn, hiện không dùng — giữ cho tương thích import)
+# HuggingFace embedding (optional, currently unused — kept for import compatibility)
 EMBEDDING_MODEL_PATH = _get(
     "EMBEDDING_MODEL_PATH",
     r"E:\hf_model\huggingface\hub\models--nomic-ai--nomic-embed-text-v1.5\snapshots\e5cf08aadaa33385f5990def41f7a23405aec398",
@@ -71,29 +71,32 @@ EMBEDDING_MODEL_PATH = _get(
 EMBEDDING_CACHE_FOLDER = _get("EMBEDDING_CACHE_FOLDER", r"E:\hf_cache")
 
 # ---------------------------------------------------------------------------
-# Tham số sinh chung + Ollama
+# Shared generation parameters + Ollama
 # ---------------------------------------------------------------------------
 REQUEST_TIMEOUT = float(_get("REQUEST_TIMEOUT", "600.0"))
-CONTEXT_WINDOW = int(_get("CONTEXT_WINDOW", "8192"))   # context window cho Ollama
-NUM_CTX = int(_get("NUM_CTX", "10240"))                # num_ctx cho Ollama
+CONTEXT_WINDOW = int(_get("CONTEXT_WINDOW", "8192"))   # context window for Ollama
+NUM_CTX = int(_get("NUM_CTX", "10240"))                # num_ctx for Ollama
 
 # ---------------------------------------------------------------------------
-# Tham số THẨM ĐỊNH (audit pipeline)
+# AUDIT pipeline parameters
 # ---------------------------------------------------------------------------
-# Số luồng gọi LLM song song khi thẩm định. vLLM trên GPU batch tốt nhiều request
-# đồng thời → tăng throughput. Phần truy hồi (Qdrant) được khóa tuần tự bên trong.
+# Number of parallel LLM-call threads during auditing. vLLM on GPU batches many
+# concurrent requests well → higher throughput. The retrieval part (Qdrant) is
+# serialized internally with a lock.
 AUDIT_CONCURRENCY = int(_get("AUDIT_CONCURRENCY", "6"))
-# Số dòng dữ liệu tối đa mỗi chunk khi thẩm định. Chunk gom theo MỤC bảng nhưng
-# không vượt quá trần này (mục dài bị cắt thành nhiều chunk).
+# Max data rows per chunk during auditing. Chunks are grouped by table SECTION but
+# never exceed this cap (long sections are split into multiple chunks).
 AUDIT_CHUNK_MAX_ROWS = int(_get("AUDIT_CHUNK_MAX_ROWS", "8"))
-# Trần số chunk thẩm định (chống tài liệu quá dài làm treo). Tăng so với giới hạn
-# cứng 20 cũ vì đã song song hóa + gom mục.
+# Cap on the number of audit chunks (prevents very long documents from hanging).
+# Raised from the old hard limit of 20 thanks to parallelization + section grouping.
 AUDIT_MAX_CHUNKS = int(_get("AUDIT_MAX_CHUNKS", "60"))
 
-# Số node truy hồi cho CHATBOT (mỗi nguồn). Cao hơn audit vì câu hỏi có thể cần
-# nhiều mẩu thông tin nằm xa nhau (trong bảng + ngoài bảng, nhiều mục).
+# Number of retrieved nodes for the CHATBOT (per source). Higher than audit because a
+# question may need several pieces of information spread far apart (inside the table +
+# outside it, across many sections).
 CHAT_TOP_K = int(_get("CHAT_TOP_K", "12"))
 
-# Thẩm định NỘI DUNG (warning): đối chiếu thông số tài liệu đang xét với YCKT trước
-# đây. Chỉ chạy khi có kho YCKT lịch sử. Kết quả chỉ là cảnh báo, không phải lỗi.
+# CONTENT audit (warning): cross-check the parameters of the document under review
+# against previous YCKT documents. Only runs when a historical YCKT store exists. The
+# result is only a warning, not an error.
 CONTENT_AUDIT_ENABLED = _get("CONTENT_AUDIT_ENABLED", "true").strip().lower() == "true"

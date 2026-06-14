@@ -27,18 +27,20 @@ embed_model = OllamaEmbedding(
 Settings.embed_model = embed_model
 
 def is_pseudo_header(element):
+    """Heuristic: treat an element as a heading (real <hN> or bold-dominated short text)."""
     if element.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
         return True
     if element.name in ['p', 'div']:
-        text_thuan = element.get_text(strip=True)
-        if not text_thuan or len(text_thuan) > 150:
+        plain_text = element.get_text(strip=True)
+        if not plain_text or len(plain_text) > 150:
             return False
         bold_text = "".join(b.get_text(strip=True) for b in element.find_all(['strong', 'b']))
-        if len(bold_text) / len(text_thuan) > 0.8:
+        if len(bold_text) / len(plain_text) > 0.8:
             return True
     return False
 
 def clean_text_for_embedding(text):
+    """Normalize text (NFKC), strip control/zero-width chars, collapse whitespace."""
     if not text:
         return ""
     text = unicodedata.normalize('NFKC', text)
@@ -46,7 +48,14 @@ def clean_text_for_embedding(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-def parse_html_to_nodes_smart(html_content, ten_van_ban):
+def parse_html_to_nodes_smart(html_content, doc_name):
+    """
+    Parse a reference document's HTML into embedded nodes, grouped by heading.
+
+    Accumulates content under the current heading chain; when a new heading is hit,
+    flushes the buffered chunk into nodes (split into <= max_chars parts). Each node's
+    text is the raw HTML (for the LLM) while the embedding is built from plain text.
+    """
     soup = BeautifulSoup(html_content, 'html.parser')
     nodes = []
     current_header = []
@@ -59,65 +68,65 @@ def parse_html_to_nodes_smart(html_content, ten_van_ban):
             continue
 
         if element.name is not None and is_pseudo_header(element):
-            text_thuan = BeautifulSoup(current_chunk_html, 'html.parser').get_text(separator=" ", strip=True)
-            text_thuan = clean_text_for_embedding(text_thuan)
+            plain_text = BeautifulSoup(current_chunk_html, 'html.parser').get_text(separator=" ", strip=True)
+            plain_text = clean_text_for_embedding(plain_text)
 
-            if len(text_thuan) > 20:
-                chuoi_header = " - ".join(current_header) if current_header else "Quy định chung"
+            if len(plain_text) > 20:
+                header_chain = " - ".join(current_header) if current_header else "Quy định chung"
 
-                # HTML nguyên bản
-                html_cho_llm = f"[SỞ CỨ: {ten_van_ban} | MỤC: {chuoi_header}]\nNỘI DUNG HTML:\n{current_chunk_html}"
+                # Original HTML
+                html_for_llm = f"[SỞ CỨ: {doc_name} | MỤC: {header_chain}]\nNỘI DUNG HTML:\n{current_chunk_html}"
 
                 max_chars = 1000
-                text_parts = [text_thuan[i:i+max_chars] for i in range(0, len(text_thuan), max_chars)]
+                text_parts = [plain_text[i:i+max_chars] for i in range(0, len(plain_text), max_chars)]
 
                 for idx, part in enumerate(text_parts):
-                    text_cho_embed = f"Văn bản: {ten_van_ban}. Mục: {chuoi_header}. Phần {idx+1}. Nội dung: {part}"
+                    text_for_embedding = f"Văn bản: {doc_name}. Mục: {header_chain}. Phần {idx+1}. Nội dung: {part}"
 
                     try:
-                        vector = embed_model.get_text_embedding(text_cho_embed)
+                        vector = embed_model.get_text_embedding(text_for_embedding)
                         if not any(math.isnan(v) for v in vector):
                             node = TextNode(
-                                text=html_cho_llm,
-                                metadata={"van_ban": ten_van_ban, "muc": chuoi_header, "phan": idx+1}
+                                text=html_for_llm,
+                                metadata={"van_ban": doc_name, "muc": header_chain, "phan": idx+1}
                             )
                             node.embedding = vector
                             nodes.append(node)
                     except Exception as e:
-                        print(f"Lỗi Ollama phần {idx+1} mục '{chuoi_header}': {e}")
-                
+                        print(f"Lỗi Ollama phần {idx+1} mục '{header_chain}': {e}")
+
                 # Reset chunk
                 current_header = [clean_text_for_embedding(element.get_text())]
                 current_chunk_html = str(element)
-            
+
             else:
                 header_text = clean_text_for_embedding(element.get_text())
                 if header_text not in current_header:
                     current_header.append(header_text)
                 current_chunk_html += str(element)
-        
+
         else:
             current_chunk_html += str(element)
-    
-    # Xử lý đoạn chunk cuối cùng (áp dụng logic chia nhỏ tương tự)
-    text_thuan_cuoi = BeautifulSoup(current_chunk_html, "html.parser").get_text(separator=" ", strip=True)
-    text_thuan_cuoi = clean_text_for_embedding(text_thuan_cuoi)
 
-    if len(text_thuan_cuoi) > 20:
-        chuoi_header = " - ".join(current_header) if current_header else "Quy định chung"
-        html_cho_llm = f"[SỞ CỨ: {ten_van_ban} | MỤC: {chuoi_header}]\nNỘI DUNG HTML:\n{current_chunk_html}"
+    # Handle the final chunk (apply the same splitting logic)
+    tail_plain_text = BeautifulSoup(current_chunk_html, "html.parser").get_text(separator=" ", strip=True)
+    tail_plain_text = clean_text_for_embedding(tail_plain_text)
+
+    if len(tail_plain_text) > 20:
+        header_chain = " - ".join(current_header) if current_header else "Quy định chung"
+        html_for_llm = f"[SỞ CỨ: {doc_name} | MỤC: {header_chain}]\nNỘI DUNG HTML:\n{current_chunk_html}"
 
         max_chars = 1000
-        text_parts = [text_thuan_cuoi[i:i+max_chars] for i in range(0, len(text_thuan_cuoi), max_chars)]
+        text_parts = [tail_plain_text[i:i+max_chars] for i in range(0, len(tail_plain_text), max_chars)]
 
         for idx, part in enumerate(text_parts):
-            text_cho_embed = f"Văn bản: {ten_van_ban}. Mục: {chuoi_header}. Phần {idx+1}. Nội dung: {part}"
+            text_for_embedding = f"Văn bản: {doc_name}. Mục: {header_chain}. Phần {idx+1}. Nội dung: {part}"
             try:
-                vector = embed_model.get_text_embedding(text_cho_embed)
+                vector = embed_model.get_text_embedding(text_for_embedding)
                 if not any(math.isnan(v) for v in vector):
                     node = TextNode(
-                        text=html_cho_llm,
-                        metadata={"van_ban": ten_van_ban, "muc": chuoi_header, "phan": idx+1}
+                        text=html_for_llm,
+                        metadata={"van_ban": doc_name, "muc": header_chain, "phan": idx+1}
                     )
                     node.embedding = vector
                     nodes.append(node)
@@ -133,16 +142,16 @@ def build_index_in_memory(
     collection_name: str = "session_refs",
 ) -> Tuple[VectorStoreIndex, qdrant_client.QdrantClient, List]:
     """
-    Dựng Qdrant index in-memory từ danh sách (html_content, doc_name).
-    Dùng cho mỗi session upload thay vì đọc DB dựng sẵn trên ổ cứng.
+    Build an in-memory Qdrant index from a list of (html_content, doc_name).
+    Used per upload session instead of reading a prebuilt DB on disk.
 
     Args:
         html_docs: list of (html_content, document_name)
-        collection_name: tên collection Qdrant (mỗi session dùng riêng)
+        collection_name: Qdrant collection name (each session uses its own)
 
     Returns:
         (VectorStoreIndex, QdrantClient, all_nodes)
-        all_nodes cần thiết để xây BM25Retriever cho hybrid search.
+        all_nodes is needed to build the BM25Retriever for hybrid search.
     """
     all_nodes: List = []
     for html_content, doc_name in html_docs:
@@ -161,15 +170,15 @@ def build_index_in_memory(
 
 def yckt_rows_to_nodes(html_content: str, doc_name: str) -> List[TextNode]:
     """
-    Chẻ một tài liệu YCKT thành các node theo DÒNG thông số (để tra cứu/đối chiếu).
+    Split a YCKT document into nodes by parameter ROW (for lookup/cross-checking).
 
-    Logic trích trường/định dạng text nằm ở chunker.build_yckt_row_payload (thuần,
-    test được không cần embedding). Hàm này chỉ làm sạch text, nhúng vector và
-    gắn vào TextNode.
+    The field-extraction / text-formatting logic lives in chunker.build_yckt_row_payload
+    (pure, testable without embedding). This function only cleans the text, embeds the
+    vector and attaches it to a TextNode.
 
-    Mỗi node:
-    - text  (LLM đọc & trích dẫn): "[Tài liệu: X | Mục: ...]\\n<các cell> "
-    - embedding: vector của plain text (Mục + Tên yêu cầu + Giá trị yêu cầu)
+    Each node:
+    - text  (LLM reads & cites): "[Tài liệu: X | Mục: ...]\\n<cells> "
+    - embedding: vector of the plain text (section + requirement name + requirement value)
     - metadata: doc_name, section, tt, param_name, param_value
     """
     nodes: List[TextNode] = []
@@ -204,14 +213,14 @@ def yckt_sections_to_nodes(
     html_content: str, doc_name: str, max_rows: int = 40
 ) -> List[TextNode]:
     """
-    Chẻ một tài liệu YCKT thành các node theo MỤC (gom mọi dòng cùng đề mục).
+    Split a YCKT document into nodes by SECTION (group all rows of the same heading).
 
-    Đây là granularity MẶC ĐỊNH cho corpus tra cứu chatbot: hỏi 'Van xả áp' trả về
-    đủ thông tin mục đó thay vì từng dòng rời rạc.
+    This is the DEFAULT granularity for the chatbot lookup corpus: asking 'Van xả áp'
+    returns the full information for that section instead of scattered individual rows.
 
-    chunk_html_table với chunk_size=max_rows: mỗi mục (cắt ở dòng section header)
-    thành một chunk; max_rows là trần an toàn cho bảng không có đề mục con (vd bảng
-    so sánh NSX) để tránh node quá lớn.
+    chunk_html_table with chunk_size=max_rows: each section (cut at the section-header
+    row) becomes one chunk; max_rows is a safety cap for tables without sub-sections
+    (e.g. a manufacturer-comparison table) to avoid an overly large node.
     """
     nodes: List[TextNode] = []
     chunks = chunk_html_table(html_content, chunk_size=max_rows, header_rows_count=2)
@@ -219,7 +228,7 @@ def yckt_sections_to_nodes(
     section_names: List[str] = []
 
     def _embed_payload(payload) -> bool:
-        """Nhúng vector & gắn node từ payload. True nếu thành công."""
+        """Embed the vector & attach a node from the payload. True on success."""
         text_for_embed = clean_text_for_embedding(payload["embed_source"])
         if not text_for_embed:
             return False
@@ -244,15 +253,15 @@ def yckt_sections_to_nodes(
             if sec:
                 section_names.append(sec)
 
-    # Node TỔNG QUAN: liệt kê toàn bộ thiết bị/vật liệu của tài liệu (chống sót khi
-    # hỏi 'liệt kê thiết bị trong tài liệu X' mà top_k truy hồi không phủ hết mục).
+    # OVERVIEW node: list all equipment/material of the document (prevents misses when
+    # asking 'list the equipment in document X' but retrieval top_k doesn't cover every section).
     overview = build_yckt_overview_payload(doc_name, section_names)
     if overview is not None:
         _embed_payload(overview)
 
-    # Node NỘI DUNG NGOÀI BẢNG (đoạn văn, tiêu đề, phụ lục...) — chunk_html_table bỏ
-    # qua phần này; bổ sung để chatbot không sót thông tin khi câu hỏi cần cả dữ
-    # liệu trong bảng lẫn ngoài bảng.
+    # OUTSIDE-TABLE content nodes (paragraphs, headings, appendices...) — chunk_html_table
+    # skips this part; added so the chatbot doesn't lose information when a question needs
+    # both in-table and out-of-table data.
     prose_count = 0
     for payload in build_yckt_prose_payloads(html_content, doc_name):
         if _embed_payload(payload):
@@ -268,18 +277,19 @@ def build_yckt_index_in_memory(
     collection_name: str = "yckt_session",
 ) -> Tuple[VectorStoreIndex, qdrant_client.QdrantClient, List]:
     """
-    Dựng Qdrant index in-memory theo MỤC cho corpus tra cứu YCKT.
+    Build an in-memory Qdrant index by SECTION for the YCKT lookup corpus.
 
-    Khác build_index_in_memory (gom theo heading văn bản, dùng cho sở cứ pháp lý):
-    hàm này gom theo đề mục bảng (vd 'Van xả áp' = đủ 1.1.1..1.1.4) — phù hợp tra
-    cứu/đối chiếu theo cụm thiết bị YCKT (kho lịch sử và tài liệu đang xét).
+    Unlike build_index_in_memory (grouped by prose heading, used for legal reference
+    sources): this function groups by table section (e.g. 'Van xả áp' = all of
+    1.1.1..1.1.4) — suited to lookup/cross-checking by YCKT equipment cluster (both the
+    historical store and the document under review).
 
     Args:
         html_docs: list of (html_content, document_name)
-        collection_name: tên collection Qdrant (mỗi client in-memory độc lập)
+        collection_name: Qdrant collection name (each in-memory client is independent)
 
     Returns:
-        (VectorStoreIndex, QdrantClient, all_nodes) — all_nodes để dựng BM25.
+        (VectorStoreIndex, QdrantClient, all_nodes) — all_nodes is for building BM25.
     """
     all_nodes: List = []
     for html_content, doc_name in html_docs:
@@ -301,18 +311,18 @@ def build_hybrid_retriever(
     top_k: int = 6,
 ):
     """
-    Tạo hybrid retriever kết hợp BM25 (lexical) + vector (semantic) với RRF fusion.
+    Create a hybrid retriever combining BM25 (lexical) + vector (semantic) with RRF fusion.
 
-    BM25 đặc biệt hiệu quả với từ khóa kỹ thuật tiếng Việt (tên thiết bị, đơn vị đo)
-    mà embedding model nomic-embed-text (tiếng Anh) dễ bỏ sót.
+    BM25 is especially effective for Vietnamese technical keywords (equipment names,
+    measurement units) that the nomic-embed-text (English) embedding model easily misses.
 
-    Fallback sang vector-only nếu llama-index-retrievers-bm25 / rank_bm25 chưa cài.
-    Cài đặt: pip install llama-index-retrievers-bm25
+    Falls back to vector-only if llama-index-retrievers-bm25 / rank_bm25 is not installed.
+    Install: pip install llama-index-retrievers-bm25
 
     Args:
-        index: VectorStoreIndex đã dựng (dùng cho vector retriever)
-        nodes: list TextNode — phải là cùng nodes đã dùng để dựng index
-        top_k: số kết quả trả về từ mỗi retriever trước khi fuse
+        index: the built VectorStoreIndex (used for the vector retriever)
+        nodes: list of TextNode — must be the same nodes used to build the index
+        top_k: number of results returned by each retriever before fusion
     """
     vector_retriever = index.as_retriever(similarity_top_k=top_k)
 
@@ -327,7 +337,7 @@ def build_hybrid_retriever(
         hybrid = QueryFusionRetriever(
             retrievers=[vector_retriever, bm25_retriever],
             similarity_top_k=top_k,
-            num_queries=1,       # tắt query expansion, chỉ fuse kết quả
+            num_queries=1,       # disable query expansion, only fuse results
             mode="reciprocal_rerank",
             use_async=False,
         )

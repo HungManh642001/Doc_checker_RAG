@@ -13,21 +13,21 @@ from rag.config import (
 
 def _build_llm():
     """
-    Tạo LLM theo LLM_PROVIDER.
+    Build the LLM according to LLM_PROVIDER.
 
-    - litellm: OpenAILike trỏ vào LiteLLM proxy (qwen3-27b trên vLLM).
-               LiteLLM proxy là OpenAI-compatible nên dùng OpenAILike là chuẩn nhất.
-    - ollama:  Ollama local (dev offline / fallback).
+    - litellm: OpenAILike pointing at the LiteLLM proxy (qwen3-27b on vLLM).
+               The LiteLLM proxy is OpenAI-compatible, so OpenAILike is the best fit.
+    - ollama:  local Ollama (offline dev / fallback).
 
-    Cả hai đều đặt is_function_calling_model=False (litellm) / không dùng tool,
-    để LlamaIndex sinh structured output bằng prompt JSON — an toàn cho vLLM.
+    Both set is_function_calling_model=False (litellm) / use no tools, so LlamaIndex
+    produces structured output via a JSON prompt — safe for vLLM.
     """
     if LLM_PROVIDER == "litellm":
         from llama_index.llms.openai_like import OpenAILike
 
         additional_kwargs = {"seed": 42}
         if LITELLM_DISABLE_THINKING:
-            # qwen3 trên vLLM: tắt thinking qua chat_template_kwargs (truyền extra_body)
+            # qwen3 on vLLM: disable thinking via chat_template_kwargs (passed as extra_body)
             additional_kwargs["extra_body"] = {
                 "chat_template_kwargs": {"enable_thinking": False}
             }
@@ -37,15 +37,15 @@ def _build_llm():
             api_base=LITELLM_BASE_URL,
             api_key=LITELLM_API_KEY,
             is_chat_model=True,
-            is_function_calling_model=False,  # dùng prompt-based JSON
+            is_function_calling_model=False,  # use prompt-based JSON
             temperature=0.0,
             timeout=REQUEST_TIMEOUT,
-            context_window=LITELLM_CONTEXT_WINDOW,  # khớp --max-model-len của vLLM
-            max_tokens=LITELLM_MAX_TOKENS,          # << context_window để chừa chỗ cho prompt
+            context_window=LITELLM_CONTEXT_WINDOW,  # match vLLM's --max-model-len
+            max_tokens=LITELLM_MAX_TOKENS,          # << context_window to leave room for the prompt
             additional_kwargs=additional_kwargs,
         )
 
-    # fallback: Ollama local
+    # fallback: local Ollama
     from llama_index.llms.ollama import Ollama
 
     return Ollama(
@@ -64,23 +64,23 @@ Settings.llm = _build_llm()
 print(f"[RAG] LLM provider = {LLM_PROVIDER} "
       f"({LITELLM_MODEL if LLM_PROVIDER == 'litellm' else OLLAMA_MODEL})")
 
-class ChiTietLoi(BaseModel):
+class ErrorDetail(BaseModel):
     error_type: str = Field(..., description="Tên lỗi (VD: Sai đơn vị, Lỗi trình bày đơn vị đo, Lỗi trình bày thông số, Thông số vượt mức, Lỗi thể thức, Lỗi logic, ...)")
     reasoning: str = Field(..., description="Giải thích từng bước 1: 1. Nội dung trong tài liệu là gì vs Nội dung trong sở cứ là gì? 2. Nội dung trong tài liệu có tuân thủ theo sở cứ không? Tại sao tính là lỗi?.")
 
-class LoiThamDinh(BaseModel):
+class AuditError(BaseModel):
     original_text: str = Field(..., description="Đoạn text hoặc thông số bị lỗi trong tài liệu tải lên.")
-    danh_sach_cac_loi: List[ChiTietLoi] = Field(..., description="Liệt kê TOÀN BỘ các lỗi mà thông số này mặc phải.")
+    danh_sach_cac_loi: List[ErrorDetail] = Field(..., description="Liệt kê TOÀN BỘ các lỗi mà thông số này mặc phải.")
     suggestion: str = Field(..., description="Đề xuất sửa chữa ngắn gọn bằng Tiếng Việt.")
     reference_location: str = Field(..., description="Vị trí chính xác trong sở cứ. Ghi 'Không rõ' nếu không có.")
     reference_quote: str = Field(..., description="copy và paste nguyên văn đoạn text từ Context information chứng minh cho lỗi này. TUYỆT ĐỐI KHÔNG TỰ BỊA.")
 
-class KetQuaThamDinh(BaseModel):
-    danh_sach_loi: List[LoiThamDinh] = Field(description="Danh sách các lỗi. Nếu không có lỗi, trả về [].")
+class AuditResult(BaseModel):
+    danh_sach_loi: List[AuditError] = Field(description="Danh sách các lỗi. Nếu không có lỗi, trả về [].")
 
 
-class CanhBaoNoiDung(BaseModel):
-    """Một cảnh báo (WARNING, không phải lỗi) khi đối chiếu nội dung với YCKT cũ."""
+class ContentWarning(BaseModel):
+    """A warning (not an error) raised when cross-checking content against past YCKT."""
     original_text: str = Field(..., description="Thông số/giá trị NGUYÊN VĂN trong tài liệu đang xét được đối chiếu.")
     muc_do: str = Field(..., description="Mức độ: 'Cần lưu ý' hoặc 'Khác biệt lớn'.")
     reasoning: str = Field(..., description="So sánh giá trị trong tài liệu đang xét vs giá trị thiết bị tương ứng trong YCKT trước đây; vì sao cần lưu ý (lệch dải, khác đáng kể, khác đơn vị...).")
@@ -88,8 +88,8 @@ class CanhBaoNoiDung(BaseModel):
     reference_quote: str = Field(..., description="Trích NGUYÊN VĂN giá trị tương ứng từ YCKT trước đây. TUYỆT ĐỐI KHÔNG BỊA.")
 
 
-class KetQuaNoiDung(BaseModel):
-    danh_sach_canh_bao: List[CanhBaoNoiDung] = Field(
+class ContentAuditResult(BaseModel):
+    danh_sach_canh_bao: List[ContentWarning] = Field(
         default_factory=list,
         description="Danh sách cảnh báo đối chiếu nội dung. Rỗng nếu phù hợp hoặc không có cơ sở đối chiếu trong sở cứ.",
     )
