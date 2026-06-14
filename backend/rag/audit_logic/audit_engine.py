@@ -76,12 +76,19 @@ class QueryTransformRetriever(BaseRetriever):
     Wrapper này can thiệp ở bước retrieve mà không ảnh hưởng bước sinh LLM.
     """
 
-    def __init__(self, inner: BaseRetriever) -> None:
+    def __init__(self, inner: BaseRetriever, retrieve_lock=None) -> None:
         self._inner = inner
+        # Khóa tuỳ chọn để tuần tự hoá phần truy hồi khi chạy đa luồng
+        # (Qdrant in-memory client không đảm bảo thread-safe). Phần sinh LLM
+        # sau bước retrieve vẫn chạy song song giữa các luồng.
+        self._retrieve_lock = retrieve_lock
         super().__init__()
 
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         clean_text = _html_to_query_text(query_bundle.query_str)
+        if self._retrieve_lock is not None:
+            with self._retrieve_lock:
+                return self._inner.retrieve(clean_text)
         return self._inner.retrieve(clean_text)
 
 
@@ -95,6 +102,7 @@ def run_audit(
     rules: str,
     top_k: int,
     retriever: Optional[BaseRetriever] = None,
+    retrieve_lock=None,
 ) -> KetQuaThamDinh:
     """
     Thẩm định một chunk HTML và trả về kết quả có cấu trúc KetQuaThamDinh.
@@ -112,6 +120,9 @@ def run_audit(
         top_k: số node sở cứ lấy ra
         retriever: pre-built hybrid retriever (tốt nhất là xây một lần, tái dùng).
                    Nếu None, fallback sang vector-only từ index.
+        retrieve_lock: threading.Lock tuỳ chọn để tuần tự hoá bước truy hồi khi
+                   chạy đa luồng (Qdrant local không thread-safe). Bước sinh LLM
+                   vẫn song song. Nếu None thì không khoá.
     """
     system_content = (
         "Bạn là một chuyên gia thẩm định tài liệu kỹ thuật Tiếng Việt nghiêm ngặt.\n"
@@ -147,7 +158,7 @@ def run_audit(
     )
 
     # Wrap: HTML query → plain text trước khi retrieve
-    wrapped = QueryTransformRetriever(base_retriever)
+    wrapped = QueryTransformRetriever(base_retriever, retrieve_lock=retrieve_lock)
 
     query_engine = RetrieverQueryEngine.from_args(
         retriever=wrapped,

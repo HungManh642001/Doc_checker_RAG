@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 import './DocumentPreview.css';
 import { fetchAndSave } from '../utils/download';
+import ChatPanel from './ChatPanel';
 
 const DOCX_MIME =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -172,6 +173,7 @@ function DocumentPreview({ sessionId, errors }) {
   };
 
   const isAccepted = selected && accepted[selected.id] != null;
+  const isWarning = selected && selected.severity === 'warning';
 
   return (
     <div className="doc-preview">
@@ -179,6 +181,7 @@ function DocumentPreview({ sessionId, errors }) {
         <div className="doc-preview-bar">
           <div className="legend-group">
             <span className="legend-chip sev-error">Nội dung lỗi</span>
+            <span className="legend-chip sev-warning">Cảnh báo nội dung</span>
             <span className="legend-chip fixed">Đã sửa</span>
           </div>
           <button
@@ -207,66 +210,78 @@ function DocumentPreview({ sessionId, errors }) {
       <div className="doc-preview-sidebar">
         {selected ? (
           <div className="dp-error-detail">
-            <h3>📋 Chi tiết lỗi</h3>
+            <h3>{isWarning ? '⚠️ Cảnh báo nội dung' : '📋 Chi tiết lỗi'}</h3>
             <div className="dp-section">
               <strong>📌 Nội dung gốc</strong>
               <code>{selected.original_text}</code>
             </div>
             <div className="dp-section">
-              <strong>🔴 Lỗi phát hiện</strong>
+              <strong>{isWarning ? '⚠️ Đối chiếu phát hiện' : '🔴 Lỗi phát hiện'}</strong>
               {(selected.danh_sach_cac_loi || []).map((e, i) => (
-                <div key={i} className="dp-suberr">
+                <div key={i} className={isWarning ? 'dp-suberr warn' : 'dp-suberr'}>
                   <span className="dp-type">{e.error_type}</span>
                   <p>{e.reasoning}</p>
                 </div>
               ))}
             </div>
 
-            {/* Đề xuất sửa — nổi bật, có thể chỉnh sửa */}
-            <div className="dp-suggest-card">
-              <div className="dp-suggest-head">💡 Đề xuất sửa</div>
-              <textarea
-                className="dp-suggest-input"
-                value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                rows={3}
-              />
-              <div className="dp-suggest-actions">
-                {isAccepted ? (
-                  <>
-                    <span className="dp-applied">✓ Đã áp dụng vào văn bản</span>
-                    <button className="dp-btn ghost" onClick={undoCurrent}>
-                      ↩︎ Hoàn tác
-                    </button>
+            {/* Cảnh báo nội dung: chỉ tham khảo, KHÔNG sửa tự động. Lỗi hình thức:
+                có thẻ đề xuất sửa & áp dụng vào văn bản. */}
+            {!isWarning && (
+              <div className="dp-suggest-card">
+                <div className="dp-suggest-head">💡 Đề xuất sửa</div>
+                <textarea
+                  className="dp-suggest-input"
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  rows={3}
+                />
+                <div className="dp-suggest-actions">
+                  {isAccepted ? (
+                    <>
+                      <span className="dp-applied">✓ Đã áp dụng vào văn bản</span>
+                      <button className="dp-btn ghost" onClick={undoCurrent}>
+                        ↩︎ Hoàn tác
+                      </button>
+                      <button className="dp-btn primary" onClick={acceptCurrent}>
+                        ↻ Cập nhật lại
+                      </button>
+                    </>
+                  ) : (
                     <button className="dp-btn primary" onClick={acceptCurrent}>
-                      ↻ Cập nhật lại
+                      ✓ Chấp nhận &amp; cập nhật
                     </button>
-                  </>
-                ) : (
-                  <button className="dp-btn primary" onClick={acceptCurrent}>
-                    ✓ Chấp nhận &amp; cập nhật
-                  </button>
-                )}
+                  )}
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="dp-section">
-              <strong>📖 Tham chiếu sở cứ</strong>
+              <strong>
+                {isWarning ? '📖 Đối chiếu YCKT trước đây' : '📖 Tham chiếu sở cứ'}
+              </strong>
               <p className="dp-ref-loc">{selected.reference_location}</p>
               <p className="dp-ref-quote">{selected.reference_quote}</p>
             </div>
           </div>
         ) : (
           <div className="dp-no-selection">
-            <p>👆 Bấm vào một vùng được tô màu trong tài liệu để xem &amp; sửa lỗi.</p>
+            <p>👆 Bấm vào một vùng được tô màu (đỏ = lỗi, vàng = cảnh báo nội dung)
+              để xem chi tiết.</p>
             <p className="dp-hint">
-              Đã đánh dấu <strong>{matchedCount()}</strong>/{errors.length} lỗi trong tài liệu.
+              Đã đánh dấu <strong>{matchedCount()}</strong>/{errors.length} mục trong tài liệu.
               {matchedCount() < errors.length &&
-                ' (Một số lỗi nằm trong nội dung không khớp chính xác nên không tô được.)'}
+                ' (Một số mục nằm trong nội dung không khớp chính xác nên không tô được.)'}
+            </p>
+            <p className="dp-hint">
+              💬 Cần tra cứu thông tin thiết bị từ các YCKT trước đây? Mở{' '}
+              <strong>Hỏi đáp YCKT trước đây</strong> ở góc phải dưới.
             </p>
           </div>
         )}
       </div>
+
+      <ChatPanel sessionId={sessionId} />
     </div>
   );
 }

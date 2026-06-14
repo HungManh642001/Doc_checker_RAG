@@ -128,6 +128,8 @@ def upload_and_analyze():
         #   - ruleDocuments: quy định → inject vào prompt thẩm định (KHÔNG index)
         reference_docs = request.files.getlist('referenceDocuments')
         rule_docs = request.files.getlist('ruleDocuments')
+        # historyDocuments: YCKT đã duyệt trước đây → kho tra cứu cho chatbot hỏi-đáp
+        history_docs = request.files.getlist('historyDocuments')
 
         # Create session directory
         session_id = str(uuid.uuid4())
@@ -163,6 +165,22 @@ def upload_and_analyze():
                     rule_paths.append(rule_path)
                     print(f"[API] Saved rule: {rule_filename}")
 
+            # Save history documents (YCKT cũ → kho tra cứu cho chatbot)
+            # Giữ TÊN GỐC (history_names) để hiển thị/viện dẫn — tên file lưu đã bị
+            # secure_filename làm mất dấu tiếng Việt + thêm tiền tố hist_N_.
+            history_paths = []
+            history_names = {}
+            for hist_doc in history_docs:
+                if hist_doc and hist_doc.filename and allowed_file(hist_doc.filename):
+                    hist_filename = secure_filename(hist_doc.filename)
+                    hist_path = os.path.join(
+                        upload_dir, f'hist_{len(history_paths)}_{hist_filename}'
+                    )
+                    hist_doc.save(hist_path)
+                    history_paths.append(hist_path)
+                    history_names[hist_path] = hist_doc.filename  # tên gốc người dùng
+                    print(f"[API] Saved history YCKT: {hist_doc.filename}")
+
             # --- Lưu các file VỪA UPLOAD thành preset (trước khi trộn preset cũ) ---
             if request.form.get('savePresets', '').lower() == 'true':
                 _save_paths_as_presets(ref_paths, REFERENCE_PRESET_DIR)
@@ -182,7 +200,9 @@ def upload_and_analyze():
             print("[API] Đang dựng index từ sở cứ...")
             analyzer = make_analyzer()
 
-            if not analyzer.initialize_rag_system(ref_paths, rule_paths):
+            if not analyzer.initialize_rag_system(
+                ref_paths, rule_paths, history_paths, history_names
+            ):
                 return jsonify({
                     'error': 'Failed to initialize RAG system. Check logs for details.'
                 }), 500
@@ -204,6 +224,7 @@ def upload_and_analyze():
                 'main_html': main_html,
                 'ref_paths': ref_paths,
                 'rule_paths': rule_paths,
+                'history_paths': history_paths,
                 'upload_dir': upload_dir,
                 'analyzer': analyzer,
                 'errors': errors,
@@ -362,6 +383,55 @@ def download_corrected(session_id):
 
     download_name = os.path.basename(corrected_path)
     return send_file(corrected_path, as_attachment=True, download_name=download_name)
+
+
+@api_bp.route('/session/<session_id>/chat', methods=['POST'])
+def chat(session_id):
+    """
+    Hỏi-đáp với chatbot trong DocumentPreview.
+
+    Chatbot tra cứu thông tin các YCKT đã duyệt TRƯỚC ĐÂY và có thể đối chiếu với
+    TÀI LIỆU ĐANG THẨM ĐỊNH (cả hai nguồn đều khả dụng; LLM tự chọn theo câu hỏi).
+
+    Expected JSON:
+    {
+        "question": "So sánh van xả áp tài liệu này với YCKT trước đây",
+        "history": [{"role": "user"|"assistant", "content": "..."}]   // tuỳ chọn
+    }
+
+    Response:
+    {
+        "success": true,
+        "answer": "...",
+        "citations": [
+            {"source", "doc_name", "section", "param_name", "param_value", "score"}
+        ]
+    }
+    """
+    if session_id not in _sessions:
+        return jsonify({'error': 'Session not found'}), 404
+
+    data = request.get_json(silent=True) or {}
+    question = (data.get('question') or '').strip()
+    if not question:
+        return jsonify({'error': 'Trường "question" là bắt buộc'}), 400
+
+    history = data.get('history') or []
+
+    analyzer = _sessions[session_id].get('analyzer')
+    if analyzer is None:
+        return jsonify({'error': 'Session chưa sẵn sàng (thiếu analyzer)'}), 409
+
+    try:
+        # Cả hai nguồn (YCKT trước đây + tài liệu đang xét) đều khả dụng để chatbot
+        # tra cứu hoặc đối chiếu tuỳ câu hỏi.
+        result = analyzer.answer_question(question, history=history)
+        return jsonify({'success': True, **result}), 200
+    except Exception as e:
+        print(f"[API] Lỗi chat: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 
 @api_bp.route('/session/<session_id>/cleanup', methods=['DELETE'])

@@ -1,0 +1,253 @@
+"""
+Engine hỏi-đáp (chatbot) cho DocumentPreview.
+
+Mục tiêu: trả lời câu hỏi của người thẩm định về việc một thông số kỹ thuật ĐÃ
+từng xuất hiện trong các YCKT trước đây hay chưa, với giá trị bao nhiêu, có tham
+khảo được để thẩm định tài liệu mới không.
+
+Grounding trên 2 nguồn (RAG):
+- NGUỒN A — kho YCKT lịch sử (history retriever).
+- NGUỒN B — tài liệu đang xét (current retriever).
+
+Trích dẫn (citations) được lấy TRỰC TIẾP từ metadata của các node truy hồi được,
+KHÔNG để LLM tự sinh — tránh bịa nguồn.
+
+Thiết kế tách lớp:
+- Các helper định dạng (format_context, build_messages, build_citations) là THUẦN,
+  thao tác trên đối tượng node-like → test được không cần Ollama/LLM.
+- Chỉ answer_question() mới gọi tới Settings.llm (LLM thật).
+"""
+
+from typing import Dict, List, Optional
+
+from llama_index.core.llms import ChatMessage, MessageRole
+
+
+SYSTEM_PROMPT = (
+    "Bạn là trợ lý tra cứu tài liệu Yêu Cầu Kỹ Thuật (YCKT) bằng tiếng Việt, giúp "
+    "người thẩm định tra cứu thông tin các YCKT đã duyệt TRƯỚC ĐÂY và đối chiếu với "
+    "TÀI LIỆU ĐANG THẨM ĐỊNH.\n"
+    "\n"
+    "HAI NGUỒN DỮ LIỆU (trong phần ngữ cảnh bên dưới):\n"
+    "- 'NGUỒN A — YCKT trước đây': kho các YCKT đã duyệt trước đây (tham chiếu).\n"
+    "- 'NGUỒN B — Tài liệu đang xét': chính tài liệu người dùng đang thẩm định.\n"
+    "\n"
+    "KHÁI NIỆM QUAN TRỌNG:\n"
+    "- Mỗi 'mục' trong bảng YCKT (vd '1.1 Van xả áp') là MỘT THIẾT BỊ/VẬT LIỆU; tên "
+    "mục có thể ghi theo đường dẫn phân cấp (vd '1 Bộ công cụ dụng cụ > 1.1 Van xả "
+    "áp') — '1 Bộ công cụ dụng cụ' là nhóm cha chứa nhiều thiết bị con.\n"
+    "- Các dòng con (1.1.1, 1.1.2...) là các THÔNG SỐ kỹ thuật của thiết bị (tên + "
+    "giá trị); có thể kèm cột tiêu chí, giải trình, sở cứ, đánh giá NSX...\n"
+    "\n"
+    "CÁCH CHỌN NGUỒN khi trả lời:\n"
+    "- Hỏi về thông tin/thiết bị trong các YCKT trước đây → dùng NGUỒN A.\n"
+    "- Hỏi về tài liệu đang thẩm định, hoặc SO SÁNH (vd 'so sánh van xả áp của tài "
+    "liệu hiện tại với YCKT trước đây') → dùng giá trị từ NGUỒN B cho 'tài liệu hiện "
+    "tại' và NGUỒN A cho 'trước đây', nêu rõ bên nào là bên nào.\n"
+    "\n"
+    "QUY TẮC BẮT BUỘC:\n"
+    "1. CHỈ dựa vào dữ liệu trong ngữ cảnh. TUYỆT ĐỐI không bịa thiết bị, thông số, "
+    "giá trị hay tên tài liệu không có trong ngữ cảnh.\n"
+    "2. TRẢ LỜI ĐẦY ĐỦ — KHÔNG BỎ SÓT: nếu hỏi về một nhóm cha (vd 'Bộ công cụ dụng "
+    "cụ'), liệt kê HẾT các thiết bị con và thông số liên quan xuất hiện trong ngữ "
+    "cảnh; khi được yêu cầu liệt kê, liệt kê toàn bộ.\n"
+    "3. Luôn viện dẫn TÊN TÀI LIỆU và MỤC khi dẫn số liệu; phân biệt rõ số liệu đến "
+    "từ 'tài liệu đang xét' hay 'YCKT trước đây nào'.\n"
+    "4. Nếu nhiều YCKT cùng chứa thiết bị/thông tin được hỏi, trình bày RIÊNG theo "
+    "từng tài liệu — KHÔNG gộp chung.\n"
+    "5. Nếu ngữ cảnh không có thông tin liên quan, nói rõ 'Chưa tìm thấy trong dữ "
+    "liệu' — không suy đoán.\n"
+    "6. Trình bày rõ ràng bằng Markdown: dùng tiêu đề, gạch đầu dòng, IN ĐẬM số "
+    "liệu, và BẢNG khi liệt kê/so sánh nhiều thông số. Bằng tiếng Việt.\n"
+)
+
+
+# ---------------------------------------------------------------------------
+# Node accessors — hỗ trợ cả NodeWithScore (llama_index) lẫn object giả khi test
+# ---------------------------------------------------------------------------
+
+def _get_node(nw):
+    """Trả về TextNode bên trong NodeWithScore (hoặc chính nó nếu đã là node)."""
+    return getattr(nw, "node", nw)
+
+
+def _node_text(nw) -> str:
+    node = _get_node(nw)
+    if hasattr(node, "get_content"):
+        try:
+            return node.get_content() or ""
+        except Exception:  # noqa: BLE001
+            pass
+    return getattr(node, "text", "") or ""
+
+
+def _node_metadata(nw) -> Dict:
+    return getattr(_get_node(nw), "metadata", {}) or {}
+
+
+def _node_score(nw) -> Optional[float]:
+    score = getattr(nw, "score", None)
+    try:
+        return float(score) if score is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Helpers thuần (test được)
+# ---------------------------------------------------------------------------
+
+def format_context(nodes: List, label: str) -> str:
+    """Ghép nội dung các node truy hồi được thành một khối context có nhãn nguồn."""
+    if not nodes:
+        return f"[{label}]\n(Không có dữ liệu liên quan.)"
+    parts = [f"[{label}]"]
+    for i, nw in enumerate(nodes, 1):
+        parts.append(f"{i}. {_node_text(nw)}")
+    return "\n".join(parts)
+
+
+def build_citations(nodes_a: List, nodes_b: List) -> List[Dict]:
+    """
+    Dựng danh sách trích dẫn từ metadata node (đã khử trùng theo doc+mục+thông số).
+
+    Mỗi citation: {source, doc_name, section, param_name, param_value, score}.
+    """
+    citations: List[Dict] = []
+    seen = set()
+    for source, nodes in (
+        ("YCKT trước đây", nodes_a or []),
+        ("Tài liệu đang xét", nodes_b or []),
+    ):
+        for nw in nodes:
+            md = _node_metadata(nw)
+            key = (
+                source,
+                md.get("doc_name", ""),
+                md.get("section", ""),
+                md.get("param_name", ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            citations.append({
+                "source": source,
+                "doc_name": md.get("doc_name", ""),
+                "section": md.get("section", ""),
+                "param_name": md.get("param_name", ""),
+                "param_value": md.get("param_value", ""),
+                "score": _node_score(nw),
+            })
+    return citations
+
+
+def build_messages(
+    question: str,
+    ctx_a: str,
+    ctx_b: str,
+    history: Optional[List[Dict]] = None,
+    focus_param: Optional[str] = None,
+    include_current: bool = True,
+) -> List[ChatMessage]:
+    """
+    Dựng danh sách ChatMessage: system + lịch sử hội thoại + câu hỏi kèm context.
+
+    history: list of {"role": "user"|"assistant", "content": str}.
+    focus_param: thông số/thiết bị người dùng đang quan tâm.
+    include_current: nếu False, KHÔNG đưa NGUỒN B (tài liệu đang thẩm định) vào
+                     context — chỉ tra cứu các YCKT trước đây (NGUỒN A) làm cơ sở
+                     đối chiếu.
+    """
+    messages: List[ChatMessage] = [
+        ChatMessage(role=MessageRole.SYSTEM, content=SYSTEM_PROMPT)
+    ]
+
+    for turn in history or []:
+        role = (turn.get("role") or "").lower()
+        content = turn.get("content") or ""
+        if not content:
+            continue
+        messages.append(ChatMessage(
+            role=MessageRole.USER if role == "user" else MessageRole.ASSISTANT,
+            content=content,
+        ))
+
+    focus = (
+        f"\nĐối tượng đang quan tâm (thiết bị/vật liệu hoặc thông số): {focus_param}"
+        if focus_param else ""
+    )
+    if include_current:
+        sources_block = f"{ctx_a}\n\n{ctx_b}\n\n"
+    else:
+        sources_block = (
+            f"{ctx_a}\n\n"
+            "(CHỈ tra cứu các YCKT TRƯỚC ĐÂY — KHÔNG dùng tài liệu đang thẩm định. "
+            "Chỉ nêu thông tin từ các tài liệu trước đây để làm cơ sở đối chiếu.)\n\n"
+        )
+
+    user_content = (
+        f"{sources_block}"
+        f"--------------------\n"
+        f"CÂU HỎI: {question}{focus}"
+    )
+    messages.append(ChatMessage(role=MessageRole.USER, content=user_content))
+    return messages
+
+
+def _safe_retrieve(retriever, query: str) -> List:
+    """Truy hồi an toàn — trả [] nếu retriever None hoặc lỗi (không chặn chat)."""
+    if retriever is None:
+        return []
+    try:
+        return retriever.retrieve(query)
+    except Exception as e:  # noqa: BLE001
+        print(f"[Chat] Lỗi retrieve: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Hàm chính — gọi LLM thật
+# ---------------------------------------------------------------------------
+
+def answer_question(
+    question: str,
+    history_retriever=None,
+    current_retriever=None,
+    history: Optional[List[Dict]] = None,
+    focus_param: Optional[str] = None,
+    include_current: bool = True,
+    top_k: int = 6,
+) -> Dict:
+    """
+    Trả lời một câu hỏi của người thẩm định bằng RAG.
+
+    include_current: nếu False, CHỈ tra cứu kho YCKT trước đây (NGUỒN A) — không lấy
+                     thông tin từ tài liệu đang thẩm định (NGUỒN B). Dùng khi người
+                     dùng muốn xem thông tin thiết bị từ tài liệu cũ làm cơ sở đối
+                     chiếu, không muốn lẫn nội dung tài liệu đang xét.
+
+    Returns:
+        {"answer": <chuỗi trả lời>, "citations": [<trích dẫn>...]}
+    """
+    query = f"{question} {focus_param}".strip() if focus_param else question
+
+    nodes_a = _safe_retrieve(history_retriever, query)
+    nodes_b = _safe_retrieve(current_retriever, query) if include_current else []
+
+    ctx_a = format_context(nodes_a, "NGUỒN A — YCKT trước đây")
+    ctx_b = format_context(nodes_b, "NGUỒN B — Tài liệu đang xét")
+    messages = build_messages(
+        question, ctx_a, ctx_b, history, focus_param, include_current=include_current
+    )
+
+    # Import lazy: side-effect cấu hình Settings.llm (theo LLM_PROVIDER).
+    from llama_index.core import Settings
+    import rag.audit_logic.audit_models  # noqa: F401  (đảm bảo Settings.llm sẵn sàng)
+
+    response = Settings.llm.chat(messages)
+    answer_text = (getattr(response.message, "content", "") or "").strip()
+
+    return {
+        "answer": answer_text,
+        "citations": build_citations(nodes_a, nodes_b),
+    }

@@ -5,6 +5,9 @@ sau đó thẩm định tài liệu đầu vào theo từng chunk.
 """
 
 import os
+import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -13,7 +16,27 @@ from typing import Dict, List, Optional, Tuple
 # để chế độ MOCK_MODE chạy được kể cả khi không có llama_index / không kết nối được.
 from rag.knowledge_base.rules import load_rules_from_files
 from rag.document_processing.chunker import chunk_html_table, extract_muc
-from rag.config import MOCK_MODE
+from rag.config import (
+    MOCK_MODE, AUDIT_CONCURRENCY, AUDIT_CHUNK_MAX_ROWS, AUDIT_MAX_CHUNKS,
+    CHAT_TOP_K, CONTENT_AUDIT_ENABLED,
+)
+
+# Tiền tố do API gắn khi lưu file upload (ref_0_, rule_1_, hist_2_...). Khi không có
+# tên gốc, ta strip tiền tố này để tên tài liệu hiển thị/viện dẫn đỡ xấu.
+_UPLOAD_PREFIX_RE = re.compile(r'^(?:ref|rule|hist)_\d+_')
+
+
+def clean_doc_name(path: str, display_name: Optional[str] = None) -> str:
+    """
+    Tên tài liệu để hiển thị/viện dẫn trong chatbot.
+
+    Ưu tiên tên gốc người dùng tải lên (display_name, còn dấu tiếng Việt); nếu
+    không có thì lấy basename và bỏ tiền tố upload (hist_0_, ref_1_, ...).
+    """
+    if display_name:
+        return display_name
+    return _UPLOAD_PREFIX_RE.sub('', os.path.basename(path))
+
 
 # Sở cứ mặc định đi kèm hệ thống (NĐ 86/2012) — dùng khi người dùng không upload sở cứ.
 _DEFAULT_REFERENCE_DIR = (
@@ -100,6 +123,17 @@ class RAGAnalyzer:
         self._mock: bool = MOCK_MODE
         self.is_initialized: bool = False
 
+        # --- Corpus tra cứu cho chatbot hỏi-đáp (dựng theo DÒNG thông số) ---
+        # Kho YCKT lịch sử (upload kèm session) — NGUỒN A khi trả lời.
+        self._history_index = None
+        self._history_client = None
+        self._history_retriever = None
+        # Tài liệu đang xét — NGUỒN B khi trả lời (dựng trong analyze_document).
+        self._current_index = None
+        self._current_client = None
+        self._current_retriever = None
+        self._main_doc_name: str = ""
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -108,6 +142,8 @@ class RAGAnalyzer:
         self,
         reference_docs: List[str],
         rule_docs: Optional[List[str]] = None,
+        history_docs: Optional[List[str]] = None,
+        history_names: Optional[Dict[str, str]] = None,
     ) -> bool:
         """
         Chuyển các file sở cứ thành HTML, embed và dựng Qdrant index in-memory.
@@ -117,6 +153,11 @@ class RAGAnalyzer:
                             Nếu rỗng → dùng sở cứ mặc định đi kèm hệ thống.
             rule_docs: đường dẫn tới các file quy định (.md/.txt/.docx) người dùng upload.
                        Nếu None/rỗng → dùng quy định mặc định (quy_dinh_chung.md).
+            history_docs: đường dẫn tới các YCKT đã duyệt trước đây (DOCX/HTML), dùng
+                          làm kho tra cứu cho chatbot hỏi-đáp. Tùy chọn — nếu rỗng thì
+                          chatbot chỉ đối chiếu trên tài liệu đang xét.
+            history_names: map {path: tên gốc} để hiển thị/viện dẫn đúng tên người
+                          dùng tải lên (path đã sanitize làm mất dấu tiếng Việt).
 
         Returns:
             True nếu thành công
@@ -134,7 +175,8 @@ class RAGAnalyzer:
 
             # Lazy import các module nặng (chỉ khi chạy thật)
             from rag.knowledge_base.vector_db import (
-                build_index_in_memory, build_hybrid_retriever,
+                build_index_in_memory, build_yckt_index_in_memory,
+                build_hybrid_retriever,
             )
 
             # Sở cứ: fallback sang sở cứ mặc định nếu người dùng không upload
@@ -164,6 +206,10 @@ class RAGAnalyzer:
             # Xây hybrid retriever một lần, tái dùng cho mọi chunk (BM25 đắt nếu tạo lại mỗi lần)
             self._retriever = build_hybrid_retriever(self._index, nodes, top_k=6)
 
+            # --- Kho YCKT lịch sử (NGUỒN A cho chatbot) — chẻ theo MỤC thiết bị ---
+            self._build_history_index(history_docs, build_yckt_index_in_memory,
+                                      build_hybrid_retriever, history_names)
+
             self.is_initialized = True
             print("[RAG] Dựng index hoàn tất.")
             return True
@@ -190,12 +236,18 @@ class RAGAnalyzer:
         if not self._mock and self._index is None:
             raise RuntimeError("Index chưa sẵn sàng.")
 
+        self._main_doc_name = os.path.basename(main_doc_path)
+
         try:
             print("[RAG] Đang chuyển tài liệu sang HTML...")
             html = docx_to_html(main_doc_path)
 
             print("[RAG] Đang chẻ nhỏ tài liệu...")
-            chunks = chunk_html_table(html, chunk_size=1, header_rows_count=2)
+            # Gom theo MỤC bảng nhưng không vượt quá AUDIT_CHUNK_MAX_ROWS dòng/chunk
+            # → ít lần gọi LLM hơn + có ngữ cảnh cùng mục (chính xác hơn chunk 1-dòng).
+            chunks = chunk_html_table(
+                html, chunk_size=AUDIT_CHUNK_MAX_ROWS, header_rows_count=2
+            )
 
             # ----- MOCK MODE: giả lập bằng heuristic, xử lý TOÀN BỘ chunk -----
             if self._mock:
@@ -208,28 +260,64 @@ class RAGAnalyzer:
             # ----- Chế độ thật: gọi LLM theo từng chunk -----
             from rag.audit_logic.audit_engine import run_audit
 
-            limit = min(20, len(chunks))
-            print(f"[RAG] {len(chunks)} chunks, xử lý {limit} chunks đầu.")
+            # Dựng index tài liệu đang xét (cho chatbot so sánh với YCKT trước đây).
+            # Không chặn pipeline thẩm định nếu dựng thất bại.
+            self._build_current_index(html)
 
-            all_errors: List[Dict] = []
-            for idx, chunk in enumerate(chunks[:limit]):
-                try:
-                    print(f"[RAG] Thẩm định chunk {idx + 1}/{limit}...")
-                    ket_qua = run_audit(
-                        self._index, chunk, self._rules, top_k=top_k,
-                        retriever=self._retriever,
-                    )
-                    section = extract_muc(chunk)
-                    for err_idx, error in enumerate(ket_qua.danh_sach_loi):
-                        entry = self._transform_error(error, idx, err_idx, section)
-                        if entry:
-                            all_errors.append(entry)
-                    n = len(ket_qua.danh_sach_loi)
-                    print(f"[RAG]   -> {n} lỗi" if n else "[RAG]   -> Hợp lệ")
-                except Exception as e:
-                    print(f"[RAG] Lỗi chunk {idx + 1}: {e}")
+            limit = min(AUDIT_MAX_CHUNKS, len(chunks))
+            audit_chunks = chunks[:limit]
 
-            print(f"[RAG] Hoàn tất: {len(all_errors)} lỗi.")
+            # Thẩm định NỘI DUNG (warning) — chỉ khi có kho YCKT lịch sử để đối chiếu.
+            run_content = (
+                CONTENT_AUDIT_ENABLED and self._history_retriever is not None
+            )
+            print(f"[RAG] {len(chunks)} chunks, xử lý {limit} chunks song song "
+                  f"({AUDIT_CONCURRENCY} luồng)"
+                  + ("; có đối chiếu nội dung." if run_content else "."))
+
+            # Thẩm định song song: vLLM batch nhiều request → nhanh hơn nhiều so với
+            # gọi tuần tự. Phần truy hồi được khoá tuần tự (Qdrant không thread-safe),
+            # phần sinh LLM (chậm) chạy đồng thời.
+            retrieve_lock = threading.Lock()
+
+            def _audit_one(idx: int, chunk: str):
+                return run_audit(
+                    self._index, chunk, self._rules, top_k=top_k,
+                    retriever=self._retriever, retrieve_lock=retrieve_lock,
+                )
+
+            def _content_one(idx: int, chunk: str):
+                from rag.audit_logic.audit_content import run_content_audit
+                return run_content_audit(
+                    self._history_retriever, chunk, top_k=CHAT_TOP_K,
+                    retrieve_lock=retrieve_lock,
+                )
+
+            formal_ordered: List = [None] * len(audit_chunks)
+            content_ordered: List = [None] * len(audit_chunks)
+            max_workers = max(1, min(AUDIT_CONCURRENCY, len(audit_chunks)))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_meta = {}
+                for idx, chunk in enumerate(audit_chunks):
+                    future_meta[executor.submit(_audit_one, idx, chunk)] = ('formal', idx)
+                    if run_content:
+                        future_meta[executor.submit(_content_one, idx, chunk)] = ('content', idx)
+
+                for future in as_completed(future_meta):
+                    kind, idx = future_meta[future]
+                    try:
+                        result = future.result()
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[RAG] Lỗi {kind} chunk {idx + 1}: {e}")
+                        result = None
+                    target = formal_ordered if kind == 'formal' else content_ordered
+                    target[idx] = (audit_chunks[idx], result)
+
+            all_errors = self._assemble_errors(formal_ordered)
+            warnings = self._assemble_warnings(content_ordered) if run_content else []
+            all_errors.extend(warnings)
+            print(f"[RAG] Hoàn tất: {len(all_errors) - len(warnings)} lỗi, "
+                  f"{len(warnings)} cảnh báo nội dung.")
             return all_errors
 
         except Exception as e:
@@ -238,21 +326,189 @@ class RAGAnalyzer:
             traceback.print_exc()
             return []
 
+    def answer_question(
+        self,
+        question: str,
+        history: Optional[List[Dict]] = None,
+        focus_param: Optional[str] = None,
+        include_current: bool = True,
+        top_k: int = 6,
+    ) -> Dict:
+        """
+        Trả lời câu hỏi chatbot bằng RAG trên kho YCKT lịch sử (NGUỒN A) và
+        tài liệu đang xét (NGUỒN B).
+
+        Args:
+            question: câu hỏi của người thẩm định.
+            history: lịch sử hội thoại [{"role": "user"|"assistant", "content": str}].
+            focus_param: thông số đang quan tâm (vd khi bấm 'Hỏi về thông số này').
+
+        Returns:
+            {"answer": str, "citations": [...]}
+        """
+        if not self.is_initialized:
+            raise RuntimeError("RAG chưa được khởi tạo. Gọi initialize_rag_system trước.")
+
+        if self._mock:
+            return {
+                "answer": (
+                    "Chatbot hỏi-đáp cần chế độ LLM thật (hãy tắt MOCK_MODE và "
+                    "kết nối LiteLLM/Ollama)."
+                ),
+                "citations": [],
+            }
+
+        from rag.chat.qa_engine import answer_question as _answer
+        return _answer(
+            question,
+            history_retriever=self._history_retriever,
+            current_retriever=self._current_retriever,
+            history=history,
+            focus_param=focus_param,
+            include_current=include_current,
+            top_k=top_k,
+        )
+
     def cleanup(self) -> None:
         """Đóng Qdrant client và giải phóng tài nguyên."""
-        if self._client:
-            try:
-                self._client.close()
-            except Exception:
-                pass
-        self._index = None
-        self._client = None
-        self._retriever = None
+        for client in (self._client, self._history_client, self._current_client):
+            if client:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+        self._index = self._client = self._retriever = None
+        self._history_index = self._history_client = self._history_retriever = None
+        self._current_index = self._current_client = self._current_retriever = None
         self.is_initialized = False
+
+    # ------------------------------------------------------------------
+    # Corpus tra cứu cho chatbot (dựng theo dòng thông số)
+    # ------------------------------------------------------------------
+
+    def _build_history_index(self, history_docs, build_yckt_index_in_memory,
+                             build_hybrid_retriever, history_names=None) -> None:
+        """Dựng index kho YCKT lịch sử (NGUỒN A). Lỗi không chặn pipeline chính."""
+        if not history_docs:
+            print("[RAG] Không có YCKT lịch sử — chatbot chỉ đối chiếu tài liệu hiện tại.")
+            return
+
+        names = history_names or {}
+        html_docs: List[Tuple[str, str]] = []
+        for path in history_docs:
+            if not os.path.exists(path):
+                print(f"[RAG] Bỏ qua YCKT lịch sử (không tồn tại): {path}")
+                continue
+            try:
+                doc_name = clean_doc_name(path, names.get(path))
+                html_docs.append((docx_to_html(path), doc_name))
+            except Exception as e:  # noqa: BLE001
+                print(f"[RAG] Không đọc được YCKT lịch sử '{path}': {e}")
+
+        if not html_docs:
+            return
+
+        try:
+            print(f"[RAG] Đang embed kho YCKT lịch sử từ {len(html_docs)} file...")
+            self._history_index, self._history_client, nodes = build_yckt_index_in_memory(
+                html_docs, collection_name="yckt_history"
+            )
+            self._history_retriever = build_hybrid_retriever(
+                self._history_index, nodes, top_k=CHAT_TOP_K
+            )
+            print(f"[RAG] Kho YCKT lịch sử sẵn sàng ({len(nodes)} node).")
+        except Exception as e:  # noqa: BLE001
+            print(f"[RAG] Không dựng được kho YCKT lịch sử: {e}")
+            self._history_index = self._history_client = self._history_retriever = None
+
+    def _build_current_index(self, main_html: str) -> None:
+        """
+        Dựng index tài liệu ĐANG THẨM ĐỊNH (để chatbot so sánh với YCKT trước đây).
+        Lỗi không chặn pipeline chính.
+        """
+        try:
+            from rag.knowledge_base.vector_db import (
+                build_yckt_index_in_memory, build_hybrid_retriever,
+            )
+            doc_name = self._main_doc_name or "Tài liệu đang thẩm định"
+            self._current_index, self._current_client, nodes = build_yckt_index_in_memory(
+                [(main_html, doc_name)], collection_name="current_doc"
+            )
+            self._current_retriever = build_hybrid_retriever(
+                self._current_index, nodes, top_k=CHAT_TOP_K
+            )
+            print(f"[RAG] Index tài liệu đang xét sẵn sàng ({len(nodes)} node).")
+        except Exception as e:  # noqa: BLE001
+            print(f"[RAG] Không dựng được index tài liệu đang xét: {e}")
+            self._current_index = self._current_client = self._current_retriever = None
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def _assemble_errors(self, ordered: List) -> List[Dict]:
+        """
+        Gom kết quả các chunk (đã sắp theo thứ tự chunk) thành danh sách lỗi.
+
+        Tách riêng khỏi vòng song song để giữ thứ tự xác định (id/section ổn định,
+        frontend/highlight không phụ thuộc thứ tự hoàn thành của luồng) và để test
+        được mà không cần gọi LLM.
+
+        Args:
+            ordered: list các phần tử (chunk_html, ket_qua | None) theo đúng thứ tự
+                     chunk. Phần tử None hoặc ket_qua None bị bỏ qua (chunk lỗi).
+        """
+        all_errors: List[Dict] = []
+        for idx, item in enumerate(ordered):
+            if not item:
+                continue
+            chunk, ket_qua = item
+            if ket_qua is None:
+                continue
+            section = extract_muc(chunk)
+            for err_idx, error in enumerate(ket_qua.danh_sach_loi):
+                entry = self._transform_error(error, idx, err_idx, section)
+                if entry:
+                    all_errors.append(entry)
+        return all_errors
+
+    def _assemble_warnings(self, ordered: List) -> List[Dict]:
+        """
+        Gom kết quả thẩm định NỘI DUNG (KetQuaNoiDung) thành danh sách CẢNH BÁO
+        (severity='warning'), cùng định dạng dict như lỗi để frontend tái dùng.
+        """
+        warnings: List[Dict] = []
+        for idx, item in enumerate(ordered):
+            if not item:
+                continue
+            chunk, ket_qua = item
+            if ket_qua is None:
+                continue
+            section = extract_muc(chunk)
+            for w_idx, cb in enumerate(getattr(ket_qua, "danh_sach_canh_bao", []) or []):
+                try:
+                    original = (cb.original_text or "").strip()
+                    if not original:
+                        continue
+                    warnings.append({
+                        "id": f"warn_c{idx}_{w_idx}",
+                        "original_text": original,
+                        "section": section,
+                        "elementId": f"chunk_{idx}",
+                        "elementType": "chunk",
+                        "danh_sach_cac_loi": [{
+                            "error_type": f"Đối chiếu nội dung — {cb.muc_do}",
+                            "reasoning": cb.reasoning,
+                            "severity": "warning",
+                        }],
+                        "suggestion": "",  # cảnh báo tham khảo, không tự sửa
+                        "reference_location": cb.reference_location,
+                        "reference_quote": cb.reference_quote,
+                        "severity": "warning",
+                    })
+                except Exception as e:  # noqa: BLE001
+                    print(f"[RAG] Lỗi transform cảnh báo: {e}")
+        return warnings
 
     def _transform_error(
         self, error, chunk_idx: int, err_idx: int = 0, section: str = ""

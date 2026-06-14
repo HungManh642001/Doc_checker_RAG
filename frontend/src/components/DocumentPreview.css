@@ -41,6 +41,12 @@
   border: 1px solid #e74c3c;
 }
 
+.legend-chip.sev-warning {
+  background: #ffe9c2;
+  color: #b9770e;
+  border: 1px solid #f39c12;
+}
+
 .legend-chip.fixed {
   background: #d4f5e2;
   color: #1e8449;
